@@ -103,9 +103,9 @@ p 值右尾计算公式：
 
 ### 6.1 初始化与依赖加载
 
-这一段做三件事：
-1）清空环境并 gc()，避免上一次会话残留变量影响结果；
-2）设置工作目录；
+这一段做三件事：\
+1）清空环境并 gc()，避免上一次会话残留变量影响结果；\
+2）设置工作目录；\
 3）加载依赖包（data.table 用于高性能 join/汇总），并初始化环境。
 
 ``` r
@@ -143,8 +143,8 @@ dir.create(out_cell_pvalue_dir,  recursive = TRUE, showWarnings = FALSE)
 
 ### 6.3 获取切片列表与全局计时
 
-这一段做两件事：
-1）记录脚本总耗时起点 start_time.t；
+这一段做两件事：\
+1）记录脚本总耗时起点 start_time.t；\
 2）读取 ./neocortex_new/ 目录下所有切片文件名（这里只是用文件名来定位对应的 .RData，不直接读取 .txt）。
 
 ``` r
@@ -198,7 +198,7 @@ for (file_name in file_names) {
     ##cwd_layer：定义每个窗口 loc 的抽样大小 n
     cwd_layer <- cell_windows_layer_d[layer == lyr, .(cell_label, loc)]
 
-    ## ---------- 超几何检验的四个核心统计量：N / K / n / sum_value ----------
+    #\超几何检验的四个核心统计量：N / K / n / sum_value
     ## N：该 layer 总细胞数（unique cell_label）
     N <- uniqueN(ft_layer$cell_label)
 
@@ -254,7 +254,7 @@ for (file_name in file_names) {
     )
   )
 
-  #写出该切片显著窗口子集（p < 0.05） ----------
+  #写出该切片显著窗口子集（p < 0.05）
   sig_high <- cell_Sliding_window_result_p_d[p < 0.05]
   fwrite(
     sig_high,
@@ -272,7 +272,7 @@ for (file_name in file_names) {
     as.numeric(difftime(end_time, start_time, units = "mins"))
   ))
 
-  #清理内存：避免长循环占用过大 ----------
+  #清理内存：避免长循环占用过大
   rm(file_tmp, cell_windows_layer_d,
      cell_Sliding_window_result_p, cell_Sliding_window_result_p_d, sig_high)
   gc()
