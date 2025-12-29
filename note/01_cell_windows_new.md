@@ -120,7 +120,7 @@ suppressPackageStartupMessages({
   library(dplyr)
 })
 
-start_time.t <- Sys.time()  # Script start time
+start_time.t <- Sys.time()
 ```
 
 ------------------------------------------------------------------------
@@ -134,7 +134,6 @@ start_time.t <- Sys.time()  # Script start time
 并通过 `fmt()` 把参数格式化成目录标签（例如 `ws0.4_ss0.02`），避免出现 `0.400000` 这种不美观的名字。
 
 ``` r
-## ================== Parameters and utilities ==================
 ws_env <- Sys.getenv("WINDOW_SIZE", "0.4")
 ss_env <- Sys.getenv("STEP_SIZE",  "0.02")
 window_size <- as.numeric(ws_env)
@@ -210,7 +209,6 @@ cat("[INFO] Using", n_cores, "cores via doParallel\n")
 cl <- parallel::makeCluster(n_cores)
 doParallel::registerDoParallel(cl)
 
-## To avoid over-subscription (data.table threads inside workers), force 1 thread per worker
 parallel::clusterEvalQ(cl, {
   data.table::setDTthreads(1L)
   NULL
