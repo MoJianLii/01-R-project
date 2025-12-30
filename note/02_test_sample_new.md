@@ -123,9 +123,9 @@ suppressPackageStartupMessages({
 
 ### 6.2 参数读取与输出目录标签
 
-这一段用于创建输出目录：\
+这一段用于创建输出目录：
 
-- cell_pvalue_new/：保存每个切片的全量 p 值表、以及 p < 0.05 的显著窗口子集；\
+- cell_pvalue_new/：保存每个切片的全量 p 值表、以及 p < 0.05 的显著窗口子集；
 
 - cell_sample_new/：本脚本中未写出文件，但保留目录创建，方便项目结构统一（后续若扩展“窗口抽样/细胞抽样结果”可直接用）。
 
@@ -166,55 +166,34 @@ file_names <- list.files('./neocortex_new/')
 ``` r
 for (file_name in file_names) {
 
-  #切片命名 + 载入 Step 1 输出
-  ##file_chose_names：作为输出文件名前缀
   file_chose_names <- tools::file_path_sans_ext(file_name)
 
-  #载入 Step 1 的滑窗结果（每切片一个 .RData）
-  ##包含：file_tmp（带注释的细胞表）与 cell_windows_layer_d（滑窗采样表）
   load(paste0('./cell_window/ws0.4_ss0.02/', file_chose_names, '.RData'))
 
-  #转为 data.table，便于后续 join 与分组统计
   setDT(file_tmp)
   setDT(cell_windows_layer_d)
 
-  #单切片计时
   start_time <- Sys.time()
 
-  #获取该切片的 layer 列表 + 结果容器
   layer_ids <- sort(unique(file_tmp$layer))
   cell_Sliding_window_result_p <- vector("list", length(layer_ids))
 
-  #按 layer 分层计算：每个 (subclass, loc) 做超几何富集检验
   for (i in seq_along(layer_ids)) {
 
     lyr <- layer_ids[i]
 
-    #背景总体（该 layer 内每个细胞的 subclass
-    ##ft_layer：定义总体 N，并可统计每个 subclass 的总数 K
     ft_layer  <- file_tmp[layer == lyr, .(cell_label, subclass)]
 
-    #窗口成员关系（该 layer 内每个细胞属于哪个 loc
-    ##cwd_layer：定义每个窗口 loc 的抽样大小 n
     cwd_layer <- cell_windows_layer_d[layer == lyr, .(cell_label, loc)]
 
-    #\超几何检验的四个核心统计量：N / K / n / sum_value
-    ## N：该 layer 总细胞数（unique cell_label）
     N <- uniqueN(ft_layer$cell_label)
-
-    #K：每个 subclass 在该 layer 的总细胞数
     Kc <- ft_layer[, .(K = .N), by = subclass]
-
-    #n：每个窗口 loc 的细胞数（unique cell_label）
     nl <- cwd_layer[, .(n = uniqueN(cell_label)), by = loc]
 
-    #sum_value：每个窗口 loc 内属于某 subclass 的细胞数（unique cell_label）
-    ##实现：把窗口表按 cell_label 映射到 subclass，再对 (subclass, loc) 计数
     obs <- cwd_layer[ft_layer, on = .(cell_label), nomatch = 0L][
       , .(sum_value = uniqueN(cell_label)), by = .(subclass, loc)
     ]
 
-    #若该层在窗口与背景之间完全无交集，则写入空表
     if (nrow(obs) == 0L) {
       cell_Sliding_window_result_p[[i]] <- data.table(
         subclass  = character(),
@@ -236,16 +215,13 @@ for (file_name in file_names) {
     ][
       ][]
 
-    #标记 layer，便于追踪来源
     res_layer[, layer := lyr]
 
     cell_Sliding_window_result_p[[i]] <- res_layer
   }
 
-  #合并该切片所有 layer 的结果
   cell_Sliding_window_result_p_d <- rbindlist(cell_Sliding_window_result_p, use.names = TRUE)
 
-  #写出该切片全量结果
   fwrite(
     cell_Sliding_window_result_p_d,
     file = file.path(
@@ -254,7 +230,6 @@ for (file_name in file_names) {
     )
   )
 
-  #写出该切片显著窗口子集（p < 0.05）
   sig_high <- cell_Sliding_window_result_p_d[p < 0.05]
   fwrite(
     sig_high,
@@ -264,7 +239,6 @@ for (file_name in file_names) {
     )
   )
 
-  #输出单切片耗时
   end_time <- Sys.time()
   message(sprintf(
     "[%s] done in %.1f mins",
@@ -272,7 +246,6 @@ for (file_name in file_names) {
     as.numeric(difftime(end_time, start_time, units = "mins"))
   ))
 
-  #清理内存：避免长循环占用过大
   rm(file_tmp, cell_windows_layer_d,
      cell_Sliding_window_result_p, cell_Sliding_window_result_p_d, sig_high)
   gc()
