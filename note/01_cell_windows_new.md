@@ -179,8 +179,8 @@ cat("[INFO] Found", length(file_names), "files in", in_dir, "\n")
 
 ### 7.4 创建输出目录
 
-输出目录结构是：\
-- 基础目录：`.../cell_window/`\
+输出目录结构是：
+- 基础目录：`.../cell_window/`
 - 参数子目录：`ws*_ss*`
 
 这样不同窗口参数的结果不会混在一起。
