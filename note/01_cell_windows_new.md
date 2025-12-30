@@ -127,8 +127,8 @@ start_time.t <- Sys.time()
 
 ### 7.2 参数读取与输出目录标签
 
-这一段用于从环境变量读取窗口参数：\
-- `WINDOW_SIZE`：窗口大小\
+这一段用于从环境变量读取窗口参数：
+- `WINDOW_SIZE`：窗口大小
 - `STEP_SIZE`：步长
 
 并通过 `fmt()` 把参数格式化成目录标签（例如 `ws0.4_ss0.02`），避免出现 `0.400000` 这种不美观的名字。
@@ -223,9 +223,10 @@ parallel::clusterEvalQ(cl, {
 
 1）**读表头**构造 `colClasses`，保证 `cell_label` / `cell_id` 从读入开始就是字符型，这是为了防止后面 merge 或 data.table 转换后类型变掉；\
 2）读主表 → 再次强制字符型；\
-3）两次 merge：\
-- `by = ccf_region_name` 合并 layer/region 注释\
-- `by = class` 合并 cell type 注释\
+3）两次 merge：
+- `by = ccf_region_name` 合并 layer/region 注释
+- `by = class` 合并 cell type 注释
+
 4）按 `layer` 分层：对每一层做滑窗采样（先 y 再 x），并生成窗口位置 `loc = "{x_low}_{y_low}"`；\
 5）把 `file_tmp`（完整合并后的表）和 `cell_windows_layer_d`保存为 `.RData`。
 
