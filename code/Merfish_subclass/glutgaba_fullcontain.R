@@ -1648,3 +1648,250 @@ log_all <- run_one_set(pairs, "mouse1_all_strict1to1", "Mouse1 strict1to1 Glut-c
 
 fwrite(log_all, file.path(outdir, "tables", "draw_log.tsv"), sep="\t", quote=FALSE)
 cat("完成。输出目录：", outdir, "\n", sep="")
+
+## ===================== 7) Mouse1: 每个strict pair的ROI内subclass统计 + 最少subclass筛选 =====================
+top_n_base <- 10L
+top_n_cap  <- 25L   # 可放宽上限：含并列时最多保留这么多
+
+pair_subclass_list <- list()
+pair_summary_list  <- list()
+pair_issue_list    <- list()
+
+for (sid in unique(pairs$slide_use)) {
+  fp <- file_try(sid)
+  rows <- pairs[slide_use == sid]
+  
+  if (is.na(fp)) {
+    pair_issue_list[[length(pair_issue_list) + 1L]] <- rows[, .(
+      pair_id, slide=slide_use, label1, label2, issue="SliceFileNotFound"
+    )]
+    next
+  }
+  
+  dt_slice <- read_slice(fp)
+  dt_slice[is.na(subclass) | subclass == "", subclass := "Unknown"]
+  
+  for (i in seq_len(nrow(rows))) {
+    rr <- rows[i]
+    
+    g_glu <- allcell_map[J(as.character(rr$label1)), all_ids]
+    g_gab <- allcell_map[J(as.character(rr$label2)), all_ids]
+    if (length(g_glu) == 0 || length(g_gab) == 0) {
+      pair_issue_list[[length(pair_issue_list) + 1L]] <- data.table(
+        pair_id=rr$pair_id, slide=sid, label1=as.character(rr$label1), label2=as.character(rr$label2),
+        issue="MissingAllIDs"
+      )
+      next
+    }
+    
+    ids_glu <- g_glu[[1]]
+    ids_gab <- g_gab[[1]]
+    roi_ids <- union(ids_glu, ids_gab)
+    dt_roi  <- dt_slice[cell_label %in% roi_ids, .(subclass)]
+    
+    if (nrow(dt_roi) == 0) {
+      pair_issue_list[[length(pair_issue_list) + 1L]] <- data.table(
+        pair_id=rr$pair_id, slide=sid, label1=as.character(rr$label1), label2=as.character(rr$label2),
+        issue="NoROICellsInSlice"
+      )
+      next
+    }
+    
+    sub_tab <- dt_roi[, .N, by=subclass][order(-N, subclass)]
+    n_roi <- nrow(dt_roi)
+    n_sub <- nrow(sub_tab)
+    sub_tab[, `:=`(
+      pair_id    = as.integer(rr$pair_id),
+      slide      = sid,
+      label1     = as.character(rr$label1),
+      label2     = as.character(rr$label2),
+      n_roi_cells= as.integer(n_roi),
+      n_subclass = as.integer(n_sub),
+      pct        = as.numeric(N / n_roi)
+    )]
+    setcolorder(sub_tab, c("pair_id","slide","label1","label2","n_roi_cells","n_subclass","subclass","N","pct"))
+    
+    pair_subclass_list[[length(pair_subclass_list) + 1L]] <- sub_tab
+    pair_summary_list[[length(pair_summary_list) + 1L]] <- data.table(
+      pair_id      = as.integer(rr$pair_id),
+      slide        = sid,
+      label1       = as.character(rr$label1),
+      label2       = as.character(rr$label2),
+      subclass1    = as.character(rr$subclass1),
+      subclass2    = as.character(rr$subclass2),
+      ov01         = as.numeric(rr$ov01),
+      n_glu_cells  = as.integer(length(ids_glu)),
+      n_gab_cells  = as.integer(length(ids_gab)),
+      n_roi_cells  = as.integer(n_roi),
+      n_subclass   = as.integer(n_sub)
+    )
+  }
+}
+
+pair_subclass_detail <- if (length(pair_subclass_list) > 0) {
+  rbindlist(pair_subclass_list, use.names=TRUE, fill=TRUE)
+} else {
+  data.table(pair_id=integer(), slide=character(), label1=character(), label2=character(),
+             n_roi_cells=integer(), n_subclass=integer(), subclass=character(), N=integer(), pct=numeric())
+}
+
+pair_subclass_summary <- if (length(pair_summary_list) > 0) {
+  rbindlist(pair_summary_list, use.names=TRUE, fill=TRUE)
+} else {
+  data.table(pair_id=integer(), slide=character(), label1=character(), label2=character(),
+             subclass1=character(), subclass2=character(), ov01=numeric(),
+             n_glu_cells=integer(), n_gab_cells=integer(), n_roi_cells=integer(), n_subclass=integer())
+}
+
+pair_issues <- if (length(pair_issue_list) > 0) {
+  rbindlist(pair_issue_list, use.names=TRUE, fill=TRUE)
+} else {
+  data.table(pair_id=integer(), slide=character(), label1=character(), label2=character(), issue=character())
+}
+
+fwrite(pair_subclass_detail,
+       file.path(outdir, "tables", "Mouse1_pair_roi_subclass_detail.tsv"),
+       sep="\t", quote=FALSE)
+fwrite(pair_subclass_summary[order(n_subclass, n_roi_cells, -ov01, pair_id)],
+       file.path(outdir, "tables", "Mouse1_pair_roi_subclass_summary.tsv"),
+       sep="\t", quote=FALSE)
+fwrite(pair_issues,
+       file.path(outdir, "tables", "Mouse1_pair_roi_subclass_issues.tsv"),
+       sep="\t", quote=FALSE)
+
+## 按“subclass种类最少”筛候选：前10起步，含并列，最多放宽到top_n_cap
+if (nrow(pair_subclass_summary) > 0) {
+  cand_src <- pair_subclass_summary[order(n_subclass, n_roi_cells, -ov01, pair_id)]
+  k <- min(top_n_base, nrow(cand_src))
+  cut_sub <- cand_src[k, n_subclass]
+  cand <- cand_src[n_subclass <= cut_sub]
+  if (nrow(cand) > top_n_cap) cand <- cand[1:top_n_cap]
+  cand[, rank_min_subclass := .I]
+  
+  fwrite(cand,
+         file.path(outdir, "tables", "Mouse1_pair_candidates_min_subclass.tsv"),
+         sep="\t", quote=FALSE)
+  
+  cand_detail <- merge(
+    pair_subclass_detail,
+    cand[, .(pair_id, rank_min_subclass)],
+    by="pair_id",
+    all.y=TRUE
+  )[order(rank_min_subclass, pair_id, -N, subclass)]
+  
+  fwrite(cand_detail,
+         file.path(outdir, "tables", "Mouse1_pair_candidates_min_subclass_detail.tsv"),
+         sep="\t", quote=FALSE)
+  
+  ## 候选pairs单独绘图（独立目录 + 清晰命名）
+  cand_plot_dir <- file.path(outdir, "mouse1_minSubclass_candidates_plots")
+  dir.create(cand_plot_dir, showWarnings=FALSE, recursive=TRUE)
+  
+  safe_token <- function(x){
+    x <- as.character(x)
+    x[is.na(x) | x == ""] <- "NA"
+    x <- gsub("[^A-Za-z0-9._-]+", "_", x)
+    x <- gsub("_+", "_", x)
+    x
+  }
+  
+  cand_draw_log <- list()
+  for (sid in unique(cand$slide)) {
+    fp <- file_try(sid)
+    rows <- cand[slide == sid]
+    
+    if (is.na(fp)) {
+      cand_draw_log[[length(cand_draw_log) + 1L]] <- rows[, .(
+        pair_id, rank_min_subclass, slide, n_subclass, note="SliceFileNotFound"
+      )]
+      next
+    }
+    
+    dt_slice <- read_slice(fp)
+    dt_slice[is.na(subclass) | subclass == "", subclass := "Unknown"]
+    
+    for (ii in seq_len(nrow(rows))) {
+      rr <- rows[ii]
+      g_glu <- allcell_map[J(as.character(rr$label1)), all_ids]
+      g_gab <- allcell_map[J(as.character(rr$label2)), all_ids]
+      
+      if (length(g_glu) == 0 || length(g_gab) == 0) {
+        cand_draw_log[[length(cand_draw_log) + 1L]] <- data.table(
+          pair_id=rr$pair_id, rank_min_subclass=rr$rank_min_subclass, slide=sid, n_subclass=rr$n_subclass,
+          note="MissingAllIDs"
+        )
+        next
+      }
+      
+      ids_glu <- g_glu[[1]]
+      ids_gab <- g_gab[[1]]
+      roi_ids <- union(ids_glu, ids_gab)
+      if (length(roi_ids) == 0) {
+        cand_draw_log[[length(cand_draw_log) + 1L]] <- data.table(
+          pair_id=rr$pair_id, rank_min_subclass=rr$rank_min_subclass, slide=sid, n_subclass=rr$n_subclass,
+          note="EmptyROI"
+        )
+        next
+      }
+      
+      prefix <- paste0(
+        "rank", sprintf("%02d", as.integer(rr$rank_min_subclass)),
+        "_pair", sprintf("%04d", as.integer(rr$pair_id)),
+        "_nsub", sprintf("%02d", as.integer(rr$n_subclass)),
+        "_", safe_token(sid)
+      )
+      
+      t1 <- paste0(
+        "[Candidate] rank=", rr$rank_min_subclass,
+        " | pair=", rr$pair_id,
+        " | nSub=", rr$n_subclass,
+        " | ", sid
+      )
+      p1 <- plot_two_regions(dt_slice, ids_glu, ids_gab, t1)
+      if (!is.null(p1)) {
+        ggsave(file.path(cand_plot_dir, paste0(prefix, "_A_twoRegions.png")),
+               p1, width=10.5, height=10.5, dpi=350, bg="white")
+        ggsave(file.path(cand_plot_dir, paste0(prefix, "_A_twoRegions.pdf")),
+               p1, width=10.5, height=10.5, device=cairo_pdf)
+      }
+      
+      t2 <- paste0(
+        "[Candidate] rank=", rr$rank_min_subclass,
+        " | pair=", rr$pair_id,
+        " | nSub=", rr$n_subclass,
+        " | ROI subclass | ", sid
+      )
+      p2 <- plot_roi_subclass_sameROI(dt_slice, roi_ids, t2)
+      if (!is.null(p2)) {
+        ggsave(file.path(cand_plot_dir, paste0(prefix, "_B_ROI_subclass.png")),
+               p2, width=11.5, height=10.5, dpi=350, bg="white")
+        ggsave(file.path(cand_plot_dir, paste0(prefix, "_B_ROI_subclass.pdf")),
+               p2, width=11.5, height=10.5, device=cairo_pdf)
+      }
+      
+      cand_draw_log[[length(cand_draw_log) + 1L]] <- data.table(
+        pair_id=rr$pair_id, rank_min_subclass=rr$rank_min_subclass, slide=sid, n_subclass=rr$n_subclass,
+        n_glu=length(ids_glu), n_gab=length(ids_gab), ROIcells=length(roi_ids), note="OK"
+      )
+    }
+  }
+  
+  cand_draw_log_dt <- if (length(cand_draw_log) > 0) {
+    rbindlist(cand_draw_log, use.names=TRUE, fill=TRUE)
+  } else {
+    data.table(
+      pair_id=integer(), rank_min_subclass=integer(), slide=character(), n_subclass=integer(),
+      n_glu=integer(), n_gab=integer(), ROIcells=integer(), note=character()
+    )
+  }
+  fwrite(cand_draw_log_dt,
+         file.path(outdir, "tables", "Mouse1_pair_candidates_min_subclass_draw_log.tsv"),
+         sep="\t", quote=FALSE)
+  
+  cat("ROI subclass统计完成：有效pairs=", nrow(pair_subclass_summary),
+      "；候选(少subclass)=", nrow(cand),
+      "；cut_n_subclass=", cut_sub,
+      "；候选图目录=", cand_plot_dir, "\n", sep="")
+} else {
+  cat("ROI subclass统计完成，但没有可用pair（请检查issues表）。\n")
+}
