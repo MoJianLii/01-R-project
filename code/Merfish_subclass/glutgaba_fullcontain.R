@@ -1603,7 +1603,7 @@ run_one_set <- function(dt_pairs, subdir, tag){
       roi_ids <- union(ids_glu, ids_gab)
       
       ## 图1：双cluster色块（注意：图2会用同一个roi_ids）
-      title1 <- paste0(sid," | ",tag," | pair_id=",rr$pair_id,
+      title1 <- paste0(sid," | "," | pair_id=",rr$pair_id,
                        " | ov=",sprintf("%.3f", rr$ov01),
                        " | nGlu=",length(ids_glu)," nGab=",length(ids_gab))
       p1 <- plot_two_regions(dt_slice, ids_glu, ids_gab, title1)
@@ -1615,7 +1615,7 @@ run_one_set <- function(dt_pairs, subdir, tag){
       }
       
       ## 图2：同一ROI(roi_ids)按subclass上色 —— 这张图的区域必然与图1一致
-      title2 <- paste0(sid," | ",tag," ROI-subclass(SameROI) | pair_id=",rr$pair_id,
+      title2 <- paste0(sid," | "," ROI-subclass(SameROI) | pair_id=",rr$pair_id,
                        " | ROIcells=",length(roi_ids))
       p2 <- plot_roi_subclass_sameROI(dt_slice, roi_ids, title2)
       if (!is.null(p2)) {
