@@ -38,6 +38,7 @@ dat_top <- tab %>%
   count(pair_type, subclass_pair_type, name = "n") %>%
   arrange(desc(n))
 
+# ===== 3) 颜色 + 主题 =====
 pal_pair <- c(
   "Gaba-Gaba" = "#0072B2",
   "Glut-Gaba" = "#009E73",
@@ -59,6 +60,9 @@ theme_topjournal <- function(base = 11){
     )
 }
 
+# =========================
+# Fig2A 左
+# =========================
 total_n <- sum(dat_comp$n)
 dat_comp <- dat_comp %>%
   dplyr::mutate(
@@ -72,7 +76,7 @@ pA_left <- ggplot(dat_comp, aes(x = 2, y = n, fill = pair_type)) +
   xlim(0.5, 2.6) +
   
   geom_text(
-    aes(x = 1.9, y = n, label = lbl),
+    aes(x = 1.9, y = n, label = lbl),       # 显式提供 y=n
     position   = position_stack(vjust = 0.5),
     color      = "white",
     fontface   = "bold",
@@ -103,6 +107,7 @@ ggsave(file.path(outdir, "Fig2A_left_A1_donut.pdf"),
 ggsave(file.path(outdir, "Fig2A_left_A1_donut.png"),
        pA_left, width = 6, height = 5, dpi = 450)
 
+# A2. 100% 堆叠条形
 pA_left_100bar <- ggplot(dat_comp %>% mutate(pair_type=factor(pair_type, levels=pair_keep)),
                          aes(x = "All pairs", y = pct, fill = pair_type)) +
   geom_col(width = 0.5, color = "white") +
@@ -119,7 +124,9 @@ pA_left_100bar <- ggplot(dat_comp %>% mutate(pair_type=factor(pair_type, levels=
 ggsave(file.path(outdir, "Fig2A_left_A2_100bar.pdf"), pA_left_100bar, width = 5, height = 5, device = cairo_pdf)
 ggsave(file.path(outdir, "Fig2A_left_A2_100bar.png"), pA_left_100bar, width = 5, height = 5, dpi = 450)
 
-
+# =========================
+# Fig2A 右 Top10
+# =========================
 topN <- 15L
 pA_right_bar <- ggplot(dat_top %>%
                          slice_max(n, n=topN) %>%
@@ -139,6 +146,7 @@ pA_right_bar <- ggplot(dat_top %>%
 ggsave(file.path(outdir, "Fig2A_right_B1_bar.pdf"), pA_right_bar, width=10, height=5.6, device=cairo_pdf)
 ggsave(file.path(outdir, "Fig2A_right_B1_bar.png"), pA_right_bar, width=10, height=5.6, dpi=450)
 
+# B3. 分面条形
 K <- 10L
 pA_right_facet <- ggplot(dat_top %>%
                            group_by(pair_type) %>%
@@ -166,11 +174,15 @@ ggsave(file.path(outdir, "Fig2A_right_B3_facet.png"), pA_right_facet, width=7.2,
 message("Done. PDFs saved to: ", normalizePath(outdir))
 
 
+##################
 suppressPackageStartupMessages({
   library(dplyr); library(ggplot2); library(scales)
 })
 
+## === 读数据（已有 tab 就注释掉） ===
 tab <- read.delim('./mouse_table/table2/Table_2_total_cell.txt')
+
+## === 1) 四类配对（保留方向） ===
 tab <- tab %>%
   mutate(pair_type_raw = paste(cluster.1_cell_Neuron_type,
                                cluster.2_cell_Neuron_type, sep = "-"))
@@ -189,6 +201,7 @@ plot_data <- tab %>%
     )
   )
 
+## === 2) 统计比例 + 标签 ===
 dfB <- plot_data %>%
   count(pair_type, overlap_bin, name = "n") %>%
   group_by(pair_type) %>%
@@ -197,6 +210,7 @@ dfB <- plot_data %>%
          pct_lab  = paste0(round(100 * pct, 1), "%")) %>%
   ungroup()
 
+## === 3) 颜色方案（深色 = 高重叠度 80–100%） ===
 bin_pal <- c(
   "0–20%"   = "#EAE2BD",   # 浅色
   "20–40%"  = "#C7E2D5",
@@ -207,6 +221,7 @@ bin_pal <- c(
 lab_col <- c("0–20%"="#222222","20–40%"="#222222","40–60%"="#FFFFFF",
              "60–80%"="#FFFFFF","80–100%"="#FFFFFF")
 
+## === 4) 主题（白底，去掉空隙） ===
 theme_cleanstack <- function(base = 13){
   theme_minimal(base_size = base) %+replace%
     theme(
@@ -224,6 +239,7 @@ theme_cleanstack <- function(base = 13){
     )
 }
 
+## === 5) 作图 ===
 pB_right_100 <- ggplot(dfB, aes(x = pair_type, y = pct, fill = overlap_bin)) +
   geom_col(width = 0.68, color = "black", linewidth = 0.25) +
   geom_text(
@@ -235,10 +251,11 @@ pB_right_100 <- ggplot(dfB, aes(x = pair_type, y = pct, fill = overlap_bin)) +
   scale_color_manual(values = lab_col, guide = "none") +
   scale_fill_manual(values = bin_pal) +
   scale_y_continuous(labels = percent_format(accuracy = 1),
-                     expand = c(0, 0), breaks = seq(0, 1, by = 0.25)) +
+                     expand = c(0, 0), breaks = seq(0, 1, by = 0.25)) +   # 没有上方空隙
   labs(title = "Overlap-bin composition across pair types") +
   theme_cleanstack()
 
+## === 6) 保存 ===
 ggsave(file.path(outdir, "Fig_overlapbin_100stack_four_types.pdf"),
        pB_right_100, width = 10.5, height = 5.6, device = cairo_pdf)
 ggsave(file.path(outdir, "Fig_overlapbin_100stack_four_types.png"),
@@ -246,11 +263,15 @@ ggsave(file.path(outdir, "Fig_overlapbin_100stack_four_types.png"),
 
 pB_right_100
 
+
+#
+# === 分组柱状图：与示例图一致（白底、分组并排、顶部标注百分比、配色沿用当前方案） ===
 suppressPackageStartupMessages({
   library(dplyr); library(ggplot2); library(scales)
 })
 
 
+# 1) 四类配对（保留方向）
 tab <- tab %>%
   mutate(pair_type_raw = paste(cluster.1_cell_Neuron_type,
                                cluster.2_cell_Neuron_type, sep = "-"))
@@ -262,25 +283,28 @@ plot_data <- tab %>%
   filter(pair_type_raw %in% pair_levels) %>%
   mutate(
     pair_type   = factor(pair_type_raw, levels = pair_levels),
-    overlap_bin = cut(100 * cluster.2.overlap.percent,
+    overlap_bin = cut(100 * cluster.2.overlap.percent,                # 如需 cluster.1 改这里
                       breaks = c(0, 20, 40, 60, 80, 100),
                       include.lowest = TRUE, labels = bin_levels)
   )
 
+# 2) 统计每个 pair_type 内各分箱占比
 dfB <- plot_data %>%
   count(pair_type, overlap_bin, name = "n") %>%
   group_by(pair_type) %>%
   mutate(pct = n / sum(n), pct_lab = paste0(round(100*pct, 1), "%")) %>%
   ungroup()
 
+# 3) 配色（沿用：低→浅，高→深）
 bin_pal <- c(
-  "0–20%"   = "#EAE2BD",
+  "0–20%"   = "#EAE2BD",   # 浅
   "20–40%"  = "#C7E2D5",
   "40–60%"  = "#59A8A2",
   "60–80%"  = "#2E74A6",
-  "80–100%" = "#234663"
+  "80–100%" = "#234663"    # 深
 )
 
+# 4) 主题（白底、边框、上方图例）
 theme_groupbar <- function(base = 12){
   theme_classic(base_size = base) %+replace%
     theme(
@@ -296,8 +320,10 @@ theme_groupbar <- function(base = 12){
     )
 }
 
+# 5) 作图（分组并排、顶部标注百分比）
+# 计算顶部留白（让标签不被裁切）
 y_max <- max(dfB$pct, na.rm = TRUE)
-ylim_top <- min(0.56, y_max * 1.15)
+ylim_top <- min(0.56, y_max * 1.15)  # 给一点富余，防止超过 60%
 
 p_group <- ggplot(
   dfB, aes(x = pair_type, y = pct, fill = overlap_bin)
@@ -324,7 +350,8 @@ p_group <- ggplot(
   guides(fill = guide_legend(nrow = 1, byrow = TRUE, title.position = "top")) +
   theme_groupbar(12)
 
-
+# 6) 保存（确保 outdir 已定义）
+# outdir <- "figures2_final"; dir.create(outdir, showWarnings = FALSE)
 ggsave(file.path(outdir, "Fig_overlapbin_grouped_four_types.pdf"),
        p_group, width = 10, height = 5, device = cairo_pdf)
 ggsave(file.path(outdir, "Fig_overlapbin_grouped_four_types.png"),
@@ -332,13 +359,18 @@ ggsave(file.path(outdir, "Fig_overlapbin_grouped_four_types.png"),
 
 p_group
 
+######################
+# =========================
+# Fig 2C —— 三种顶刊级方案（散点 + 回归 / 边际分布 / 二维密度）
+# =========================
 suppressPackageStartupMessages({
   library(tidyverse)
   library(ggpubr)
-  library(ggExtra)
-  library(viridis)
+  library(ggExtra)   # 方案二：边际分布
+  library(viridis)   # 方案三：二维密度
 })
 
+# ---- 预处理：只取 Glut/Gaba 互配；可切换以 cluster2 为“子集” ----
 SUB_IS_CLUSTER2 <- TRUE
 
 dfC_raw <- tab %>%
@@ -374,12 +406,15 @@ dfC$overlap_bin <- cut(
   include.lowest = TRUE, labels = bin_levels
 )
 
+# 与 B 图一致：低→浅，高→深
 c_cols <- c("0–20%"="#EAE2BD","20–40%"="#C7E2D5","40–60%"="#59A8A2",
             "60–80%"="#2E74A6","80–100%"="#234663")
 
+# 统一坐标范围（便于跨 bin 对比）
 size_limits <- c(2.5, 12.5); size_breaks <- seq(2.5, 12.5, 2.5)
 eir_limits  <- c(-2.5, 7.5);  eir_breaks  <- seq(-2.5, 7.5, 2.5)
 
+# ---- 方案一：经典顶刊风格（散点 + 线性回归 + 显著性） ----
 make_scatter_regline <- function(dsub, x, y, xlabel, ylabel, title, col,
                                  xlim, ylim, xbr, ybr){
   ggplot(dsub, aes({{x}}, {{y}})) +
@@ -398,6 +433,7 @@ make_scatter_regline <- function(dsub, x, y, xlabel, ylabel, title, col,
     )
 }
 
+# ---- 方案二：边际分布（直方图）+ 散点 + 回归 ----
 make_scatter_marginal <- function(dsub, x, y, xlabel, ylabel, title, col,
                                   xlim, ylim, xbr, ybr){
   p <- ggplot(dsub, aes({{x}}, {{y}})) +
@@ -416,6 +452,7 @@ make_scatter_marginal <- function(dsub, x, y, xlabel, ylabel, title, col,
   ggMarginal(p, type = "histogram", fill = col, alpha = 0.5, bins = 30)
 }
 
+# ---- 方案三：二维密度（高点数/拥挤时最清晰） ----
 make_scatter_density <- function(dsub, x, y, xlabel, ylabel, title, col,
                                  xlim, ylim, xbr, ybr){
   ggplot(dsub, aes({{x}}, {{y}})) +
@@ -437,6 +474,7 @@ make_scatter_density <- function(dsub, x, y, xlabel, ylabel, title, col,
     )
 }
 
+# ---- 生成三套图（每个 bin 两张：Size & E/I），并拼成 2×5 面板 ----
 build_grid_and_save <- function(fun_builder, tag){
   plist_size <- list(); plist_eir <- list()
   for (b in bin_levels) {
@@ -472,6 +510,7 @@ build_grid_and_save <- function(fun_builder, tag){
          grid, width = 14, height = 6.2)
 }
 
+# 分别输出三种方案
 build_grid_and_save(make_scatter_regline,  "regline")
 build_grid_and_save(make_scatter_marginal, "marginal")
 build_grid_and_save(make_scatter_density,  "density")
@@ -480,8 +519,10 @@ suppressPackageStartupMessages({
   library(dplyr); library(ggplot2); library(scales); library(ggpubr)
 })
 
-
+# ===== 读入与准备 =====
 tab <- read.delim('./mouse_table/table2/Table_2_total_cell.txt')
+
+# 与原图一致：四类、以 cluster.2.overlap.percent × 100
 df_all <- tab %>%
   mutate(
     pair_type = paste(cluster.1_cell_Neuron_type, cluster.2_cell_Neuron_type, sep = "-"),
@@ -492,6 +533,7 @@ df_all <- tab %>%
 
 pair_pal4 <- c("Gaba-Gaba"="#0072B2","Gaba-Glut"="#56B4E9","Glut-Gaba"="#009E73","Glut-Glut"="#D55E00")
 
+# 组内数值（四舍五入到 1 位）
 summary_tbl <- df_all %>%
   group_by(pair_type) %>%
   summarise(
@@ -503,11 +545,13 @@ summary_tbl <- df_all %>%
   mutate(lab = paste0("n = ", scales::comma(n),
                       "\nmedian = ", round(med, 1), "%\nmean = ", round(meanv, 1), "%"))
 
+# —— 统一放置高度：把“数值标签”放在上三分之一区域，括号在更靠上的区域，互不遮挡 —— 
 y_max   <- max(df_all$overlap2_pct, na.rm = TRUE)
-y_lbl   <- y_max * 0.82
-y_brk_1 <- y_max * 0.94
-step_increase <- 0.065
+y_lbl   <- y_max * 0.82     # 组内 n/median/mean 放这里
+y_brk_1 <- y_max * 0.94     # 最低一层括号起点
+step_increase <- 0.065      # 括号层间距
 
+# 两两比较（四类）：显示“数值 p 值”
 comparisons_all <- list(
   c("Glut-Gaba","Gaba-Glut"),
   c("Glut-Gaba","Glut-Glut"),
@@ -517,10 +561,12 @@ comparisons_all <- list(
   c("Gaba-Gaba","Glut-Glut")
 )
 
+# ===== 图 1：四类全量，带数值且避免遮挡 =====
 p_full <- ggplot(df_all, aes(x = pair_type, y = overlap2_pct, fill = pair_type)) +
   geom_violin(width = 0.85, alpha = 0.15, color = NA, trim = TRUE) +
   geom_boxplot(width = 0.6, outlier.shape = NA, alpha = 0.95, color = "black") +
   
+  # 组内 n/median/mean（白底小标签，避免与底图混淆）
   geom_label(
     data = transform(summary_tbl, y = y_lbl),
     aes(x = pair_type, y = y, label = lab),
@@ -530,16 +576,17 @@ p_full <- ggplot(df_all, aes(x = pair_type, y = overlap2_pct, fill = pair_type))
     fill = "white", color = "black"
   ) +
   
+  # 两两 Wilcoxon 数值 p 值（放到更靠上的区间）
   stat_compare_means(
     comparisons = comparisons_all, method = "wilcox.test",
     label = "p.format", tip.length = 0.01, bracket.size = 0.45,
     size = 4.1, hide.ns = TRUE,
     step.increase = step_increase,
-    label.y = y_brk_1
+    label.y = y_brk_1   # 首层起点，其余按 step_increase 叠加
   ) +
   
   scale_fill_manual(values = pair_pal4, guide = "none") +
-  scale_y_continuous(expand = expansion(mult = c(0.02, 0.28))) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.28))) +  # 顶部给足空白
   labs(title = "Overlap distribution with pairwise Wilcoxon tests",
        x = NULL, y = "Cluster2 overlap (%)") +
   theme_classic(base_size = 12) +
@@ -554,6 +601,7 @@ ggsave(file.path(outdir, "Fig_box_overlaps_pairwise_wilcox_WITH_NUMBERS_neat.pdf
 ggsave(file.path(outdir, "Fig_box_overlaps_pairwise_wilcox_WITH_NUMBERS_neat.png"),
        p_full, width = 8.6, height = 6.9, dpi = 450)
 
+# ===== 图 2：只保留 Glut-Gaba 与 Gaba-Glut =====
 df_2dir <- df_all %>%
   filter(pair_type %in% c("Glut-Gaba","Gaba-Glut")) %>%
   droplevels()
@@ -605,3 +653,6 @@ ggsave(file.path(outdir, "Fig_box_overlaps_GlutGaba_vs_GabaGlut_WITH_NUMBERS.pdf
        p_2dir, width = 6.6, height = 6.2, device = cairo_pdf)
 ggsave(file.path(outdir, "Fig_box_overlaps_GlutGaba_vs_GabaGlut_WITH_NUMBERS.png"),
        p_2dir, width = 6.6, height = 6.2, dpi = 450)
+
+message("✅ Saved:\n - ", normalizePath(file.path(outdir, "Fig_box_overlaps_pairwise_wilcox_WITH_NUMBERS_neat.*")),
+        "\n - ", normalizePath(file.path(outdir, "Fig_box_overlaps_GlutGaba_vs_GabaGlut_WITH_NUMBERS.*")))

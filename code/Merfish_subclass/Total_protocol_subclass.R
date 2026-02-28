@@ -1386,42 +1386,24 @@ mouse_subclass_cluster_total <- fread(
 )
 mouse_subclass_cluster_total <- force_id_cols_char(mouse_subclass_cluster_total)
 
-## ========= 1. 数值列：把 enrich_subclass_cell_ids_num 也转成 numeric =========
 num_cols <- c("total_cell_num",
               "Glut_Neruon_cell_ids_num",
-              "GABA_Neruon_cell_ids_num",
-              "enrich_subclass_cell_ids_num")
+              "GABA_Neruon_cell_ids_num")
 for (nm in num_cols) {
   if (nm %in% names(mouse_subclass_cluster_total)) {
     mouse_subclass_cluster_total[[nm]] <- as.numeric(mouse_subclass_cluster_total[[nm]])
   }
 }
 
-## ========= 2. 必需字段：把 enrich_subclass_cell_ids_num 加进来 =========
 need_cols_cluster <- c("slide","layer","region","cell_Neruon_type","subclass",
                        "total_cell_num","Glut_Neruon_cell_ids_num","GABA_Neruon_cell_ids_num",
                        "Glut_Neruon_cell_ids","GABA_Neruon_cell_ids","Non_Neruon_cell_ids",
-                       "merge_regions","enrich_subclass_cell_ids_num")
+                       "merge_regions")
 miss_cluster <- setdiff(need_cols_cluster, names(mouse_subclass_cluster_total))
 if (length(miss_cluster)) {
   stop(sprintf("missing columns in mouse_subclass_cluster_total: %s",
                paste(miss_cluster, collapse = ",")))
 }
-
-## ========= 3. 关键：在这里就按 enrich_subclass_cell_ids_num >= 3 做过滤 =========
-mouse_subclass_cluster_total <- mouse_subclass_cluster_total[
-  mouse_subclass_cluster_total$enrich_subclass_cell_ids_num >= 3,
-  ,
-  drop = FALSE
-]
-
-## （可选）顺便把过滤后的 cluster 表也另存一份，和 Fig1 一样命名
-fwrite(
-  mouse_subclass_cluster_total,
-  file = file.path(combo_root, "mouse_subclass_cluster_total_over3.txt"),
-  sep = "\t", quote = FALSE, row.names = FALSE
-)
-
 
 cauchy_combination_test <- function(pvals, weights = NULL) {
   pvals <- as.numeric(pvals)
@@ -1574,46 +1556,12 @@ mouse_cluster_number <- mouse_cluster_number[
   order(mouse_cluster_number$cluster_number, decreasing = TRUE), ]
 top_subclasses <- head(as.character(mouse_cluster_number$subclass), 8)
 
-## 假设前面已经有：combo_root, Table_1_total_cell, top_subclasses 等对象
-
-library(data.table)
-library(stringr)
-
-## 1. 确保输出目录存在
-table1_dir <- file.path(combo_root, "mouse_table", "table1")
-dir.create(table1_dir, recursive = TRUE, showWarnings = FALSE)
-
-## 2. 辅助函数：把 subclass 名字转为安全的文件名
-safe_subclass_name <- function(x) {
-  x <- as.character(x)
-  x <- gsub("[/\\\\]", "-", x)          # 所有 / 和 \ 换成 -
-  x <- gsub("[[:space:]]+", "_", x)     # 连续空格换成 _
-  x <- gsub("[^[:alnum:]_\\-]+", "", x) # 其它奇怪符号去掉
-  x
-}
-
-## 3. 按 subclass 拆分并写出
 for (cl in top_subclasses) {
-  
   sub1 <- Table_1_total_cell[Table_1_total_cell$subclass %in% cl, , drop = FALSE]
-  
-  if (nrow(sub1) == 0) {
-    message("Warning: no rows for subclass: ", cl)
-    next
-  }
-  
-  # 安全的文件名
-  cl_safe <- safe_subclass_name(cl)
-  
-  outp <- file.path(
-    table1_dir,
-    sprintf("Table_1_%s_cell.txt", cl_safe)
-  )
-  
+  outp <- file.path(combo_root, "mouse_table", "table1",
+                    sprintf("Table_1_%s_cell.txt", cl))
   fwrite(sub1, outp, sep = "\t", quote = FALSE, row.names = FALSE)
-  message("Written: ", outp)
 }
-
 
 pairship_file <- file.path(combo_root, "mouse_cluster_pairship_new_total.txt")
 stopifnot(file.exists(pairship_file))
@@ -1730,22 +1678,21 @@ fwrite(Table_2_total_cell,
        file.path(combo_root, "mouse_table", "table2", "Table_2_total_cell.txt"),
        sep = "\t", quote = FALSE, row.names = FALSE)
 
-
-## ================================================================
-## Fig1 (前) + Fig2 (后) 统一脚本（已修正：Fig1A TopN口径、Fig1B cell_uid、Fig2F2 分母口径、Share 0–100%）
-## ================================================================
-
 rm(list = ls()); gc()
+setwd('E:/zaw/2511/mouseMerfish_zhuang_subclass')
+outdir <- NULL
 
-## ===================== 0) 基础路径与参数 =====================
-base_dir <- "E:/zaw/2511/mouseMerfish_zhuang_subclass"
-setwd(base_dir)
+suppressPackageStartupMessages({
+  library(dplyr); library(ggplot2); library(scales)
+  library(ggrepel)
+  library(ggtext)
+  library(ggpubr)
+})
 
 ws_env <- Sys.getenv("WINDOW_SIZE", "0.4")
 ss_env <- Sys.getenv("STEP_SIZE",  "0.02")
 window_size <- as.numeric(ws_env)
 step_size   <- as.numeric(ss_env)
-
 fmt <- function(x){
   s <- formatC(x, format = "f", digits = 6)
   s <- sub("0+$", "", s)
@@ -1753,84 +1700,46 @@ fmt <- function(x){
   s
 }
 subdir_tag <- paste0("ws", fmt(window_size), "_ss", fmt(step_size))
+base_dir <- "E:/zaw/2511/mouseMerfish_zhuang_subclass"
 combo_root <- file.path(base_dir, subdir_tag)
 dir.create(combo_root, recursive = TRUE, showWarnings = FALSE)
 
-fig_dir <- file.path(combo_root, "figures1_subclass")
-dir.create(fig_dir, showWarnings = FALSE, recursive = TRUE)
-
 outdir <- file.path(combo_root, "figures2_subclass")
-dir.create(outdir, showWarnings = FALSE, recursive = TRUE)
+dir.create(outdir, showWarnings = FALSE)
 
-## ===================== 1) 加载依赖 =====================
-suppressPackageStartupMessages({
-  library(data.table)
-  library(dplyr)
-  library(tidyr)
-  library(stringr)
-  library(ggplot2)
-  library(scales)
-  library(ggtext)
-  library(ggpubr)
-  library(ggExtra)
-  library(ggforce)
-  library(viridis)
-  library(grid)
-  library(forcats)
-})
+tab <- read.delim(file.path(combo_root, "mouse_table", "table2", "Table_2_total_cell.txt"))
 
-## ===================== 2) 读入核心数据 =====================
-mouse_subclass_cluster_total <- fread(
-  file.path(combo_root, "mouse_subclass_cluster_total.txt"),
-  sep = "\t", header = TRUE, data.table = FALSE, check.names = FALSE
-)
+tab$pair_type <- paste(tab$cluster.1_cell_Neruon_type,
+                       tab$cluster.2_cell_Neruon_type, sep = '-')
+tab$pair_type[tab$pair_type == 'Gaba-Glut']      <- 'Glut-Gaba'
+tab$pair_type[tab$pair_type == 'NonNeuron-Glut'] <- 'Glut-NonNeuron'
+tab$pair_type[tab$pair_type == 'NonNeuron-Gaba'] <- 'Gaba-NonNeuron'
 
-mouse_subclass_cluster_total_3 <- mouse_subclass_cluster_total[
-  mouse_subclass_cluster_total$enrich_subclass_cell_ids_num >= 3, 
-]
-
-fwrite(
-  mouse_subclass_cluster_total_3,
-  file = file.path(combo_root, "mouse_subclass_cluster_total_over3.txt"),
-  sep = "\t", quote = FALSE, row.names = FALSE
-)
-
-mapping_path <- file.path(combo_root, "Merfish_brain_cell_type_subclass.txt")
-Merfish_sub_map <- fread(mapping_path, sep = "\t", header = TRUE, data.table = FALSE, check.names = FALSE)
-colnames(Merfish_sub_map) <- c("subclass", "cell_Neruon_type", "subclass_sim")
-
-tab <- fread(
-  file.path(combo_root, "mouse_table", "table2", "Table_2_total_cell.txt"),
-  sep = "\t", header = TRUE, data.table = FALSE, check.names = FALSE
-)
-
-## --------------------- 2.1 补齐 cluster_total 的 label/subclass_sim ---------------------
-clu_tbl <- mouse_subclass_cluster_total_3
-
-if (!"label" %in% names(clu_tbl)) {
-  stopifnot(all(c("slide","layer","subclass","merge_regions") %in% names(clu_tbl)))
-  clu_tbl$label <- with(clu_tbl, paste(slide, layer, subclass, merge_regions, sep = "_"))
+standardize_pair_type <- function(pair_str){
+  parts <- strsplit(pair_str, " vs ")[[1]]
+  paste(sort(parts), collapse = " vs ")
 }
-if (!"subclass_sim" %in% names(clu_tbl)) {
-  clu_tbl <- clu_tbl %>%
-    left_join(Merfish_sub_map[, c("subclass","subclass_sim")], by = "subclass")
-}
+tab$subclass_pair_type <- paste(tab$cluster.1_subclass, tab$cluster.2_subclass, sep = " vs ")
+tab$subclass_pair_type <- sapply(tab$subclass_pair_type, standardize_pair_type)
 
-## ================================================================
-## 通用主题
-## ================================================================
-theme_paper <- function(base=12){
-  theme_classic(base_size = base) %+replace%
-    theme(
-      panel.border = element_rect(color="black", fill=NA, linewidth=0.6),
-      axis.text    = element_text(color="black"),
-      plot.title   = element_text(hjust=0.5, face="bold", margin=margin(b=6)),
-      plot.subtitle= element_text(hjust=0.5, margin=margin(b=6)),
-      legend.position = "top",
-      legend.title = element_text(face="bold"),
-      plot.margin = margin(6, 10, 6, 6)
-    )
-}
+pair_keep <- c("Gaba-Gaba","Glut-Gaba","Glut-Glut")
+dat_comp  <- tab %>%
+  filter(pair_type %in% pair_keep) %>%
+  count(pair_type, name = "n") %>%
+  mutate(pct = n / sum(n),
+         lbl = paste0(pair_type, "\n", n, " (", percent(pct, accuracy = 0.1), ")")) %>%
+  arrange(match(pair_type, pair_keep))
+
+dat_top <- tab %>%
+  filter(pair_type %in% pair_keep) %>%
+  count(pair_type, subclass_pair_type, name = "n") %>%
+  arrange(desc(n))
+
+pal_pair <- c(
+  "Gaba-Gaba" = "#0072B2",
+  "Glut-Gaba" = "#009E73",
+  "Glut-Glut" = "#D55E00"
+)
 
 theme_topjournal <- function(base = 11){
   theme_minimal(base_size = base) %+replace%
@@ -1847,325 +1756,77 @@ theme_topjournal <- function(base = 11){
     )
 }
 
-## ================================================================
-## ============================== Fig1 ==============================
-## ================================================================
-
-## ---------- Fig1A：左饼图（3种 type cluster 占比） ----------
-type_cols <- c("Gaba"="#6FB06F", "Glut"="#8C3D4A", "NonNeuron"="#F2A94F")
-type_labels <- c("Gaba"="GABA", "Glut"="Glut", "NonNeuron"="NonNeuron")
-
-cluster_type_counts <- clu_tbl %>%
-  filter(!is.na(cell_Neruon_type)) %>%
-  count(cell_Neruon_type, name = "cluster_n") %>%
-  mutate(
-    pct = cluster_n / sum(cluster_n),
-    label_inner = sprintf("%s clusters\n(%s)\n%s",
-                          type_labels[cell_Neruon_type],
-                          format(cluster_n, big.mark = ","),
-                          percent(pct, accuracy = 1))
-  ) %>%
-  arrange(match(cell_Neruon_type, c("Gaba","Glut","NonNeuron")))
-
-total_clusters <- sum(cluster_type_counts$cluster_n)
-
-p1A_left <- ggplot(cluster_type_counts, aes(x = 2, y = cluster_n, fill = cell_Neruon_type)) +
-  geom_col(width = 1, color = "black") +
-  coord_polar(theta = "y") +
-  xlim(0.5, 2.5) +
-  geom_text(aes(label = label_inner),
-            position = position_stack(vjust = 0.5),
-            size = 4, fontface = "bold", color = "black", lineheight = 1.1) +
-  annotate("text", x = 0.5, y = 0,
-           label = paste0("Total clusters\n(", format(total_clusters, big.mark=","), ")"),
-           size = 4.2, fontface = "bold", lineheight = 1.1) +
-  scale_fill_manual(values = type_cols, labels = type_labels) +
-  theme_void(base_size = 14) +
-  theme(legend.position = "none")
-
-ggsave(file.path(fig_dir, "Fig1A_left_clusterType_pie_over3.png"), p1A_left, width = 5, height = 5, dpi = 300)
-ggsave(file.path(fig_dir, "Fig1A_left_clusterType_pie_over3.pdf"), p1A_left, width = 5, height = 5)
-
-## ---------- Fig1A：右柱图（TopN subclass_sim，✅先按subclass汇总选TopN，再回填分type堆叠） ----------
-topN <- 15L
-
-subclass_counts <- clu_tbl %>%
-  filter(!is.na(subclass_sim), !is.na(cell_Neruon_type)) %>%
-  count(subclass_sim, cell_Neruon_type, name = "cluster_n")
-
-subclass_rank <- subclass_counts %>%
-  group_by(subclass_sim) %>%
-  summarise(total_n = sum(cluster_n), .groups = "drop") %>%
-  slice_max(total_n, n = topN, with_ties = FALSE)
-
-subclass_top <- subclass_counts %>%
-  filter(subclass_sim %in% subclass_rank$subclass_sim) %>%
-  left_join(subclass_rank, by = "subclass_sim") %>%
-  mutate(subclass_sim = factor(subclass_sim, levels = subclass_rank$subclass_sim[order(subclass_rank$total_n, decreasing = TRUE)]))
-
-p1A_right <- ggplot(subclass_top,
-                    aes(x = subclass_sim, y = cluster_n, fill = cell_Neruon_type)) +
-  geom_col(width = 0.7, color = "black", linewidth = 0.3) +
-  geom_hline(yintercept = 1000, linetype = "dashed", color = "#D55E00", linewidth = 0.6) +
-  geom_text(aes(label = cluster_n),
-            position = position_stack(vjust = 1.02),
-            size = 3.2, fontface = "bold") +
-  scale_fill_manual(values = type_cols, labels = type_labels) +
-  labs(title = "Mouse subclass cluster (Top subclasses)", x = NULL, y = "Cluster number") +
-  theme_paper(13) +
-  theme(axis.text.x = element_text(angle = 35, hjust = 1, vjust = 1, size = 11),
-        legend.position = "top")
-
-ggsave(file.path(fig_dir, "Fig1A_right_topSubclass_bar_over3.png"), p1A_right, width = 7.8, height = 4.8, dpi = 300)
-ggsave(file.path(fig_dir, "Fig1A_right_topSubclass_bar_over3.pdf"), p1A_right, width = 7.8, height = 4.8)
-
-## ---------- Fig1B：TopN subclass 的 Clustered vs Non-clustered donut（✅cell_uid 全局唯一） ----------
-top_sub_sim <- as.character(subclass_rank$subclass_sim)
-
-slice_dir   <- file.path(base_dir, "neocortex_new")
-slice_files <- list.files(slice_dir, pattern = "\\.txt$", full.names = TRUE)
-
-read_slice_cells <- function(fpath){
-  slice_id <- tools::file_path_sans_ext(basename(fpath))
-  dt <- data.table::fread(fpath, sep = "\t", header = TRUE, data.table = FALSE, check.names = FALSE)
-  
-  if ("cell_label" %in% names(dt)) {
-    dt$cell_id <- as.character(dt$cell_label)
-  } else if ("cell_id" %in% names(dt)) {
-    dt$cell_id <- as.character(dt$cell_id)
-  } else return(NULL)
-  
-  if (!"subclass" %in% names(dt)) return(NULL)
-  dt$subclass <- as.character(dt$subclass)
-  
-  dt <- dt[, c("cell_id","subclass"), drop = FALSE]
-  dt$cell_uid <- paste(slice_id, dt$cell_id, sep = "__")
-  
-  dt <- dt %>%
-    left_join(Merfish_sub_map[, c("subclass","subclass_sim")], by = "subclass")
-  
-  dt[, c("cell_uid","subclass_sim"), drop = FALSE]
-}
-
-cell_list <- lapply(slice_files, read_slice_cells)
-cells_all <- bind_rows(cell_list) %>%
-  filter(!is.na(subclass_sim)) %>%
-  distinct(cell_uid, .keep_all = TRUE)
-
-cells_top <- cells_all %>% filter(subclass_sim %in% top_sub_sim)
-total_ids_by_sub <- split(cells_top$cell_uid, cells_top$subclass_sim)
-
-split_ids <- function(x){
-  if (is.null(x) || length(x) == 0) return(character(0))
-  ids <- unlist(str_split(as.character(x), "[,]"))
-  ids <- ids[ids != "" & !is.na(ids)]
-  ids
-}
-
-donut_stats_list <- vector("list", length(top_sub_sim))
-names(donut_stats_list) <- top_sub_sim
-
-for (s in top_sub_sim) {
-  total_ids <- unique(total_ids_by_sub[[s]])
-  total_n   <- length(total_ids)
-  
-  if (is.null(total_ids) || total_n == 0) {
-    donut_stats_list[[s]] <- data.frame(subclass_sim=s, total_cells=0, cluster_cells=0)
-    next
-  }
-  
-  clu_s <- clu_tbl %>% filter(subclass_sim == s)
-  if (!nrow(clu_s) || !"enrich_subclass_cell_ids" %in% names(clu_s)) {
-    donut_stats_list[[s]] <- data.frame(subclass_sim=s, total_cells=total_n, cluster_cells=0)
-    next
-  }
-  
-  ## ✅ 关键：cluster_total 的 cell_id 需要用 slide 前缀拼成 cell_uid，才能与 slice 端一致
-  cluster_ids_list <- lapply(seq_len(nrow(clu_s)), function(i){
-    ids0 <- split_ids(clu_s$enrich_subclass_cell_ids[i])
-    slide_i <- as.character(clu_s$slide[i])
-    paste(slide_i, ids0, sep="__")
-  })
-  
-  cluster_cell_ids <- unique(unlist(cluster_ids_list))
-  cluster_cell_ids <- intersect(cluster_cell_ids, total_ids)
-  cluster_n <- length(cluster_cell_ids)
-  
-  donut_stats_list[[s]] <- data.frame(subclass_sim=s, total_cells=total_n, cluster_cells=cluster_n)
-}
-
-donut_stats <- bind_rows(donut_stats_list) %>%
-  mutate(
-    non_cluster_cells = pmax(total_cells - cluster_cells, 0),
-    pct_cluster       = ifelse(total_cells == 0, NA, cluster_cells / total_cells),
-    pct_noncluster    = ifelse(total_cells == 0, NA, non_cluster_cells / total_cells)
-  )
-
-ring_df <- donut_stats %>%
-  transmute(
-    class = subclass_sim,
-    total_cells,
-    Clustered       = cluster_cells,
-    `Non-clustered` = non_cluster_cells,
-    pct_cluster,
-    pct_noncluster
-  ) %>%
-  pivot_longer(cols = c(Clustered, `Non-clustered`), names_to = "group", values_to = "count") %>%
-  mutate(group = factor(group, levels = c("Clustered","Non-clustered")),
-         pct   = ifelse(group=="Clustered", pct_cluster, pct_noncluster)) %>%
-  group_by(class) %>%
-  arrange(group, .by_group = TRUE) %>%
-  mutate(
-    total_count = sum(count),
-    frac  = ifelse(total_count>0, count/total_count, 0),
-    ymax  = cumsum(frac),
-    ymin  = lag(ymax, default = 0),
-    start = 2*pi*ymin,
-    end   = 2*pi*ymax,
-    mid   = (start+end)/2,
-    r0    = 0.6,
-    r     = 1.2,
-    r_lab = r + 0.25,
-    lx    = r_lab * sin(mid),
-    ly    = r_lab * cos(mid),
-    hjust_lab = ifelse(lx >= 0, 0, 1),
-    label = paste0(
-      group, "\n",
-      format(count, big.mark=","), " cells\n",
-      ifelse(is.na(pct), "NA",
-             ifelse(pct < 0.01, "<1%", paste0(round(pct*100), "%")))
-    )
-  ) %>%
-  ungroup() %>%
-  filter(total_count > 0, count > 0)
-
-center_df <- donut_stats %>%
-  transmute(class = subclass_sim,
-            center_label = paste0(format(total_cells, big.mark=","), " cells"))
-
-fill_colors <- c("Clustered"="#56B4E9", "Non-clustered"="#E69F00")
-
-p1B <- ggplot() +
-  geom_arc_bar(
-    data = ring_df,
-    aes(x0=0, y0=0, r0=r0, r=r, start=start, end=end, fill=group),
-    color="white", linewidth=0.5
-  ) +
-  geom_text(data = ring_df,
-            aes(x=lx, y=ly, label=label, hjust=hjust_lab),
-            size=3, fontface="bold", lineheight=1.05) +
-  geom_text(data = center_df, aes(x=0, y=0, label=center_label),
-            size=3.0, fontface="bold", lineheight=1.05) +
-  facet_wrap(~ class, ncol = 3) +
-  scale_fill_manual(values = fill_colors, name = NULL) +
-  coord_fixed(xlim=c(-1.7,1.7), ylim=c(-1.7,1.7), clip="off") +
-  theme_void(base_size = 12) +
-  theme(
-    strip.text      = element_text(size=11, face="bold"),
-    legend.position = "top",
-    legend.text     = element_text(size=10),
-    panel.spacing.x = unit(6, "lines"),
-    panel.spacing.y = unit(1.5, "lines"),
-    plot.title      = element_text(hjust=0.5, face="bold", size=16),
-    plot.margin     = margin(5,10,5,10)
-  ) +
-  labs(title = "Mouse class cell composition (Top subclasses)")
-
-ggsave(file.path(fig_dir, "Fig1B_donut_topSubclasses_cluster_vs_noncluster_over3.png"), p1B, width=16, height=9, dpi=400)
-ggsave(file.path(fig_dir, "Fig1B_donut_topSubclasses_cluster_vs_noncluster_over3.pdf"), p1B, width=16, height=9)
-
-## ================================================================
-## ============================== Fig2 ==============================
-## ================================================================
-
-## --------------------- 预处理：pair_type / subclass_pair_type ---------------------
-tab2 <- tab %>%
-  mutate(
-    pair_type = paste(cluster.1_cell_Neruon_type, cluster.2_cell_Neruon_type, sep = "-"),
-    pair_type = dplyr::case_when(
-      pair_type == "Gaba-Glut"      ~ "Glut-Gaba",
-      pair_type == "NonNeuron-Glut" ~ "Glut-NonNeuron",
-      pair_type == "NonNeuron-Gaba" ~ "Gaba-NonNeuron",
-      TRUE ~ pair_type
-    )
-  )
-
-standardize_pair_type <- function(pair_str){
-  parts <- strsplit(pair_str, " vs ")[[1]]
-  paste(sort(parts), collapse = " vs ")
-}
-tab2$subclass_pair_type <- paste(tab2$cluster.1_subclass, tab2$cluster.2_subclass, sep = " vs ")
-tab2$subclass_pair_type <- sapply(tab2$subclass_pair_type, standardize_pair_type)
-
-## ================================================================
-## Fig2A：pair_type donut + 100% bar + Top subclass_pair bar
-## ================================================================
-pair_keep <- c("Gaba-Gaba","Glut-Gaba","Glut-Glut")
-
-dat_comp <- tab2 %>%
-  filter(pair_type %in% pair_keep) %>%
-  count(pair_type, name="n") %>%
-  mutate(pct = n / sum(n)) %>%
-  arrange(match(pair_type, pair_keep))
-
-dat_top <- tab2 %>%
-  filter(pair_type %in% pair_keep) %>%
-  count(pair_type, subclass_pair_type, name="n") %>%
-  arrange(desc(n))
-
-pal_pair <- c("Gaba-Gaba"="#0072B2", "Glut-Gaba"="#009E73", "Glut-Glut"="#D55E00")
-
 total_n <- sum(dat_comp$n)
 dat_comp <- dat_comp %>%
-  mutate(lbl = sprintf("%s\n%.2f%%", pair_type, (n/total_n)*100))
+  dplyr::mutate(
+    pct = n / total_n,
+    lbl = sprintf("%s\n%.2f%%", pair_type, pct * 100)
+  )
 
-pA_left <- ggplot(dat_comp, aes(x=2, y=n, fill=pair_type)) +
-  geom_col(width=0.8, color="white") +
-  coord_polar(theta="y") +
+pA_left <- ggplot(dat_comp, aes(x = 2, y = n, fill = pair_type)) +
+  geom_col(width = 0.8, color = "white") +
+  coord_polar(theta = "y") +
   xlim(0.5, 2.6) +
-  geom_text(aes(x=1.9, y=n, label=lbl),
-            position=position_stack(vjust=0.5),
-            color="white", fontface="bold", size=3.2, lineheight=0.95) +
-  annotate("text", x=0.5, y=0, label=paste0("Total\n", total_n),
-           fontface="bold", size=4.1, lineheight=1.05) +
-  scale_fill_manual(values=pal_pair, breaks=pair_keep) +
-  labs(title="Pair Type Composition") +
-  theme_void(base_size=12) +
-  theme(plot.title=element_text(hjust=0.5, face="bold"),
-        legend.position="top",
-        legend.title=element_blank())
+  geom_text(
+    aes(x = 1.9, y = n, label = lbl),
+    position   = position_stack(vjust = 0.5),
+    color      = "white",
+    fontface   = "bold",
+    size       = 3.2,
+    lineheight = 0.95
+  ) +
+  annotate(
+    "text", x = 0.5, y = 0,
+    label    = paste0("Total\n", total_n),
+    fontface = "bold",
+    size     = 4.1,
+    lineheight = 1.05
+  ) +
+  scale_fill_manual(
+    values = pal_pair,
+    breaks = c("Gaba-Gaba", "Glut-Gaba", "Glut-Glut")
+  ) +
+  labs(title = "Pair Type Composition", fill = NULL) +
+  theme_void(base_size = 12) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "top"
+  )
 
-ggsave(file.path(outdir, "Fig2A_left_A1_donut.pdf"), pA_left, width=6, height=5, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig2A_left_A1_donut.png"), pA_left, width=6, height=5, dpi=450)
+ggsave(file.path(outdir, "Fig2A_left_A1_donut.pdf"),
+       pA_left, width = 6, height = 5, device = cairo_pdf)
+ggsave(file.path(outdir, "Fig2A_left_A1_donut.png"),
+       pA_left, width = 6, height = 5, dpi = 450)
 
 pA_left_100bar <- ggplot(dat_comp %>% mutate(pair_type=factor(pair_type, levels=pair_keep)),
-                         aes(x="All pairs", y=pct, fill=pair_type)) +
-  geom_col(width=0.5, color="white") +
-  geom_text(aes(label=percent(pct, accuracy=0.1)),
-            position=position_stack(vjust=0.5),
-            size=4.5, color="white", fontface="bold") +
-  scale_y_continuous(labels=percent_format(), expand=c(0,0), limits=c(0,1)) +
-  scale_fill_manual(values=pal_pair) +
+                         aes(x = "All pairs", y = pct, fill = pair_type)) +
+  geom_col(width = 0.5, color = "white") +
+  geom_text(aes(label = percent(pct, accuracy = 0.1)),
+            position = position_stack(vjust = 0.5),
+            size = 4.5, color = "white", fontface = "bold") +
+  scale_y_continuous(labels = percent_format(), expand = c(0,0), limits = c(0,1)) +
+  scale_fill_manual(values = pal_pair) +
   theme_topjournal(12) +
-  theme(axis.title=element_blank(), axis.text.x=element_blank(),
-        panel.grid.major.y=element_line(color="grey90")) +
-  labs(title="Pair Type Composition (100%)")
+  theme(axis.title = element_blank(), axis.text.x = element_blank(),
+        panel.grid.major.y = element_line(color="grey90")) +
+  labs(title = "Pair Type Composition (100%)")
 
-ggsave(file.path(outdir, "Fig2A_left_A2_100bar.pdf"), pA_left_100bar, width=5, height=5, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig2A_left_A2_100bar.png"), pA_left_100bar, width=5, height=5, dpi=450)
+ggsave(file.path(outdir, "Fig2A_left_A2_100bar.pdf"), pA_left_100bar, width = 5, height = 5, device = cairo_pdf)
+ggsave(file.path(outdir, "Fig2A_left_A2_100bar.png"), pA_left_100bar, width = 5, height = 5, dpi = 450)
 
-topN2 <- 15L
+topN <- 15L
 pA_right_bar <- ggplot(dat_top %>%
-                         slice_max(n, n=topN2, with_ties=FALSE) %>%
-                         mutate(subclass_pair_type=str_trim(gsub("\\s+", " ", subclass_pair_type)),
+                         slice_max(n, n=topN) %>%
+                         mutate(subclass_pair_type=gsub("^\\d+\\s+", "", subclass_pair_type),
+                                subclass_pair_type=gsub("vs\\s*\\d+\\s+", "vs ", subclass_pair_type),
                                 subclass_pair_type=forcats::fct_reorder(subclass_pair_type, n),
                                 pair_type=factor(pair_type, levels=pair_keep)),
                        aes(x=n, y=subclass_pair_type, fill=pair_type)) +
   geom_col(width=0.65) +
-  geom_text(aes(label=comma(n)), hjust=-0.15, size=4.2, fontface="bold") +
+  geom_text(aes(label=scales::comma(n)), hjust=-0.15, size=4.2, fontface="bold") +
   scale_fill_manual(values=pal_pair) +
   scale_x_continuous(expand=expansion(mult=c(0,0.08))) +
-  labs(x="Cluster number", y=NULL, title=sprintf("Mouse subclass cluster (Top %d)", topN2)) +
+  labs(x="Cluster number", y=NULL, title="Mouse subclass cluster (Top 10)") +
   theme_topjournal(11) +
   theme(axis.text.y=element_text(size=12, face="bold"))
 
@@ -2177,17 +1838,18 @@ pA_right_facet <- ggplot(dat_top %>%
                            group_by(pair_type) %>%
                            slice_max(n, n=K, with_ties=FALSE) %>%
                            ungroup() %>%
-                           mutate(subclass_pair_type=str_trim(gsub("\\s+", " ", subclass_pair_type))) %>%
+                           mutate(subclass_pair_type=gsub("^\\d+\\s+", "", subclass_pair_type),
+                                  subclass_pair_type=gsub("vs\\s*\\d+\\s+", "vs ", subclass_pair_type)) %>%
                            group_by(pair_type) %>%
                            mutate(subclass_pair_type=forcats::fct_reorder(subclass_pair_type, n)) %>%
                            ungroup(),
                          aes(x=n, y=subclass_pair_type, fill=pair_type)) +
   geom_col(width=0.62, show.legend=FALSE) +
-  geom_text(aes(label=comma(n)), hjust=-0.14, size=4, fontface="bold") +
+  geom_text(aes(label=scales::comma(n)), hjust=-0.14, size=4, fontface="bold") +
   facet_wrap(~pair_type, scales="free_y", ncol=1) +
   scale_fill_manual(values=pal_pair) +
   scale_x_continuous(expand=expansion(mult=c(0,0.14))) +
-  labs(x="Cluster number", y=NULL, title="Top subclass pairs by pair type") +
+  labs(x="Cluster number", y=NULL, title="Top subclass pairs by subclass") +
   theme_topjournal(11) +
   theme(strip.text=element_text(face="bold"),
         axis.text.y=element_text(size=12, face="bold"))
@@ -2195,34 +1857,47 @@ pA_right_facet <- ggplot(dat_top %>%
 ggsave(file.path(outdir, "Fig2A_right_B3_facet.pdf"), pA_right_facet, width=7.2, height=10, device=cairo_pdf)
 ggsave(file.path(outdir, "Fig2A_right_B3_facet.png"), pA_right_facet, width=7.2, height=10, dpi=450)
 
-## ================================================================
-## Fig2B：Overlap bin（100%堆叠 + 分组柱）
-## ================================================================
-tab2 <- tab2 %>%
-  mutate(pair_type_raw = paste(cluster.1_cell_Neruon_type, cluster.2_cell_Neruon_type, sep="-"))
+suppressPackageStartupMessages({
+  library(dplyr); library(ggplot2); library(scales)
+})
 
-pair_levels <- c("Gaba-Gaba","Gaba-Glut","Glut-Gaba","Glut-Glut")
-bin_levels  <- c("0–20%","20–40%","40–60%","60–80%","80–100%")
+tab <- read.delim(file.path(combo_root, "mouse_table", "table2", "Table_2_total_cell.txt"))
 
-plot_data <- tab2 %>%
+tab <- tab %>%
+  mutate(pair_type_raw = paste(cluster.1_cell_Neruon_type,
+                               cluster.2_cell_Neruon_type, sep = "-"))
+
+pair_levels <- c("Gaba-Gaba", "Gaba-Glut", "Glut-Gaba", "Glut-Glut")
+
+plot_data <- tab %>%
   filter(pair_type_raw %in% pair_levels) %>%
   mutate(
-    pair_type   = factor(pair_type_raw, levels = pair_levels),
-    overlap_bin = cut(100 * cluster.2.overlap.percent,
-                      breaks = c(0,20,40,60,80,100),
-                      include.lowest = TRUE, labels = bin_levels)
+    pair_type  = factor(pair_type_raw, levels = pair_levels),
+    overlap_bin = cut(
+      100 * cluster.2.overlap.percent,
+      breaks = c(0, 20, 40, 60, 80, 100),
+      include.lowest = TRUE,
+      labels = c("0–20%", "20–40%", "40–60%", "60–80%", "80–100%")
+    )
   )
 
 dfB <- plot_data %>%
-  count(pair_type, overlap_bin, name="n") %>%
+  count(pair_type, overlap_bin, name = "n") %>%
   group_by(pair_type) %>%
-  mutate(pct = n/sum(n),
+  mutate(pct = n / sum(n),
          show_lab = pct >= 0.03,
-         pct_lab = paste0(round(100*pct,1), "%")) %>%
+         pct_lab  = paste0(round(100 * pct, 1), "%")) %>%
   ungroup()
 
-bin_pal <- c("0–20%"="#EAE2BD","20–40%"="#C7E2D5","40–60%"="#59A8A2","60–80%"="#2E74A6","80–100%"="#234663")
-lab_col <- c("0–20%"="#222222","20–40%"="#222222","40–60%"="#FFFFFF","60–80%"="#FFFFFF","80–100%"="#FFFFFF")
+bin_pal <- c(
+  "0–20%"   = "#EAE2BD",
+  "20–40%"  = "#C7E2D5",
+  "40–60%"  = "#59A8A2",
+  "60–80%"  = "#2E74A6",
+  "80–100%" = "#234663"
+)
+lab_col <- c("0–20%"="#222222","20–40%"="#222222","40–60%"="#FFFFFF",
+             "60–80%"="#FFFFFF","80–100%"="#FFFFFF")
 
 theme_cleanstack <- function(base = 13){
   theme_minimal(base_size = base) %+replace%
@@ -2241,211 +1916,211 @@ theme_cleanstack <- function(base = 13){
     )
 }
 
-pB_right_100 <- ggplot(dfB, aes(x=pair_type, y=pct, fill=overlap_bin)) +
-  geom_col(width=0.68, color="black", linewidth=0.25) +
+pB_right_100 <- ggplot(dfB, aes(x = pair_type, y = pct, fill = overlap_bin)) +
+  geom_col(width = 0.68, color = "black", linewidth = 0.25) +
   geom_text(
-    data = dfB %>% filter(show_lab),
+    data = dplyr::filter(dfB, show_lab),
     aes(label = pct_lab, color = overlap_bin),
     position = position_stack(vjust = 0.5),
-    size=4, fontface="bold", show.legend=FALSE
+    size = 4, fontface = "bold", show.legend = FALSE
   ) +
-  scale_color_manual(values = lab_col, guide="none") +
+  scale_color_manual(values = lab_col, guide = "none") +
   scale_fill_manual(values = bin_pal) +
-  scale_y_continuous(labels = percent_format(accuracy=1),
-                     expand=c(0,0), breaks=seq(0,1,0.25)) +
-  labs(title="Overlap-bin composition across pair types") +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     expand = c(0, 0), breaks = seq(0, 1, by = 0.25)) +
+  labs(title = "Overlap-bin composition across pair types") +
   theme_cleanstack()
 
-ggsave(file.path(outdir, "Fig_overlapbin_100stack_four_types.pdf"), pB_right_100, width=10.5, height=5.6, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig_overlapbin_100stack_four_types.png"), pB_right_100, width=10.5, height=5.6, dpi=300)
+ggsave(file.path(outdir, "Fig_overlapbin_100stack_four_types.pdf"),
+       pB_right_100, width = 10.5, height = 5.6, device = cairo_pdf)
+ggsave(file.path(outdir, "Fig_overlapbin_100stack_four_types.png"),
+       pB_right_100, width = 10.5, height = 5.6, dpi = 300)
+
+suppressPackageStartupMessages({
+  library(dplyr); library(ggplot2); library(scales)
+})
+
+tab <- tab %>%
+  mutate(pair_type_raw = paste(cluster.1_cell_Neruon_type,
+                               cluster.2_cell_Neruon_type, sep = "-"))
+
+pair_levels <- c("Gaba-Gaba", "Gaba-Glut", "Glut-Gaba", "Glut-Glut")
+bin_levels  <- c("0–20%", "20–40%", "40–60%", "60–80%", "80–100%")
+
+plot_data <- tab %>%
+  filter(pair_type_raw %in% pair_levels) %>%
+  mutate(
+    pair_type   = factor(pair_type_raw, levels = pair_levels),
+    overlap_bin = cut(100 * cluster.2.overlap.percent,
+                      breaks = c(0, 20, 40, 60, 80, 100),
+                      include.lowest = TRUE, labels = bin_levels)
+  )
+
+dfB <- plot_data %>%
+  count(pair_type, overlap_bin, name = "n") %>%
+  group_by(pair_type) %>%
+  mutate(pct = n / sum(n), pct_lab = paste0(round(100*pct, 1), "%")) %>%
+  ungroup()
+
+bin_pal <- c(
+  "0–20%"   = "#EAE2BD",
+  "20–40%"  = "#C7E2D5",
+  "40–60%"  = "#59A8A2",
+  "60–80%"  = "#2E74A6",
+  "80–100%" = "#234663"
+)
 
 theme_groupbar <- function(base = 12){
   theme_classic(base_size = base) %+replace%
     theme(
-      panel.border      = element_rect(color="black", fill=NA, linewidth=0.6),
+      panel.border      = element_rect(color = "black", fill = NA, linewidth = 0.6),
       axis.title.x      = element_blank(),
-      axis.title.y      = element_text(margin=margin(r=6)),
-      axis.text.x       = element_text(face="bold", margin=margin(t=5)),
+      axis.title.y      = element_text(margin = margin(r = 6)),
+      axis.text.x       = element_text(face = "bold", margin = margin(t = 5)),
       legend.position   = "top",
-      legend.title      = element_text(face="bold"),
+      legend.title      = element_text(face = "bold"),
       legend.key.height = unit(10, "pt"),
-      plot.title        = element_text(hjust=0.5, face="bold", margin=margin(b=6)),
-      plot.margin       = margin(6,10,6,6)
+      plot.title        = element_text(hjust = 0.5, face = "bold", margin = margin(b = 6)),
+      plot.margin       = margin(6, 10, 6, 6)
     )
 }
 
 y_max <- max(dfB$pct, na.rm = TRUE)
 ylim_top <- min(0.56, y_max * 1.15)
 
-p_group <- ggplot(dfB, aes(x=pair_type, y=pct, fill=overlap_bin)) +
-  geom_col(position=position_dodge(width=0.72),
-           width=0.62, color="black", linewidth=0.25) +
-  geom_text(aes(label=pct_lab),
-            position=position_dodge(width=0.72),
-            vjust=-0.35, size=3.2, fontface="bold") +
-  scale_fill_manual(values=bin_pal, breaks=bin_levels,
-                    name="Sub Cluster Cell Overlap Percent") +
-  scale_y_continuous(labels=percent_format(accuracy=1),
-                     limits=c(0, ylim_top), expand=c(0,0),
-                     breaks=seq(0,0.5,0.1)) +
-  guides(fill=guide_legend(nrow=1, byrow=TRUE, title.position="top")) +
-  theme_groupbar(12)
-
-ggsave(file.path(outdir, "Fig_overlapbin_grouped_four_types.pdf"), p_group, width=10, height=5, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig_overlapbin_grouped_four_types.png"), p_group, width=10, height=5, dpi=300)
-
-## =========================
-## Fig2B grouped：竖排标注 n（保证不超出柱顶）
-## =========================
-library(dplyr)
-library(ggplot2)
-library(scales)
-
-# dfB 需要包含：pair_type, overlap_bin, n, pct
-dfB_plot <- dfB %>%
-  mutate(
-    n_lab   = paste0("n=", comma(n)),
-    pct_lab = paste0(round(100 * pct, 1), "%"),
-    # 关键：n 的 y 坐标放在柱子内部靠近顶端（并对小柱子做下限保护）
-    y_n = pmax(pct - 0.045, pct * 0.55, 0.025)
-  )
-
-y_max <- max(dfB_plot$pct, na.rm = TRUE)
-ylim_top <- min(0.70, y_max + 0.12)  # 顶部给百分比留空间
-
-p_group_n_vertical <- ggplot(dfB_plot, aes(x = pair_type, y = pct, fill = overlap_bin)) +
+p_group <- ggplot(
+  dfB, aes(x = pair_type, y = pct, fill = overlap_bin)
+) +
   geom_col(
     position = position_dodge(width = 0.72),
     width = 0.62, color = "black", linewidth = 0.25
   ) +
-  ## 1) 百分比：柱顶上方
   geom_text(
-    aes(label = pct_lab, y = pct + 0.015),
+    aes(label = pct_lab),
     position = position_dodge(width = 0.72),
-    vjust = 0, size = 3.2, fontface = "bold", color = "black"
+    vjust = -0.35, size = 3.2, fontface = "bold"
   ) +
-  ## 2) n：竖排，柱内靠近顶端（不会超出）
-  geom_text(
-    aes(label = n_lab, y = y_n, color = overlap_bin),
-    position = position_dodge(width = 0.72),
-    angle = 90,
-    vjust = 0.5, hjust = 0.5,
-    size = 3, fontface = "bold",
-    show.legend = FALSE
-  ) +
-  scale_fill_manual(
-    values = bin_pal, breaks = bin_levels,
-    name = "Sub Cluster Cell Overlap Percent"
-  ) +
-  # n 的字体颜色：浅柱黑字、深柱白字（用你已有的 lab_col）
-  scale_color_manual(values = lab_col, guide = "none") +
+  scale_fill_manual(values = bin_pal,
+                    breaks = bin_levels,
+                    name   = "Sub Cluster Cell Overlap Percent") +
   scale_y_continuous(
     labels = percent_format(accuracy = 1),
     limits = c(0, ylim_top),
     expand = c(0, 0),
-    breaks = seq(0, 0.7, 0.1)
+    breaks = seq(0, 0.5, by = 0.1)
   ) +
+  labs(y = NULL, title = NULL) +
   guides(fill = guide_legend(nrow = 1, byrow = TRUE, title.position = "top")) +
-  labs(title = "Overlap-bin composition across pair types") +
   theme_groupbar(12)
 
-ggsave(
-  file.path(outdir, "Fig_overlapbin_grouped_four_types_withN_vertical.pdf"),
-  p_group_n_vertical, width = 10, height = 5, device = cairo_pdf
-)
-ggsave(
-  file.path(outdir, "Fig_overlapbin_grouped_four_types_withN_vertical.png"),
-  p_group_n_vertical, width = 10, height = 5, dpi = 300
-)
+ggsave(file.path(outdir, "Fig_overlapbin_grouped_four_types.pdf"),
+       p_group, width = 10, height = 5, device = cairo_pdf)
+ggsave(file.path(outdir, "Fig_overlapbin_grouped_four_types.png"),
+       p_group, width = 10, height = 5, dpi = 300)
 
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(ggpubr)
+  library(ggExtra)
+  library(viridis)
+})
 
-
-
-## ================================================================
-## Fig2C：scatter grid（Cluster size / E-I ratio，按 overlap bin 分组）
-## ================================================================
 SUB_IS_CLUSTER2 <- TRUE
 
-dfC_raw <- tab2 %>%
+dfC_raw <- tab %>%
   filter(
-    cluster.1_cell_Neruon_type %in% c("Glut","Gaba"),
-    cluster.2_cell_Neruon_type %in% c("Glut","Gaba"),
-    cluster.1_cell_Neruon_type != cluster.2_cell_Neruon_type
+    `cluster.1_cell_Neruon_type` %in% c("Glut","Gaba"),
+    `cluster.2_cell_Neruon_type` %in% c("Glut","Gaba"),
+    `cluster.1_cell_Neruon_type` != `cluster.2_cell_Neruon_type`
   )
 
 if (SUB_IS_CLUSTER2) {
   dfC <- dfC_raw %>%
     mutate(
-      overlap_sub_pct = 100 * cluster.2.overlap.percent,
-      log2_size_sub  = log2(pmax(cluster.2_total_cell_num, 1)),
-      log2_size_main = log2(pmax(cluster.1_total_cell_num, 1)),
-      log2_ei_sub    = log2(pmax(cluster.2_E_I_Ratio, 1e-6)),
-      log2_ei_main   = log2(pmax(cluster.1_E_I_Ratio, 1e-6))
+      overlap_sub_pct = 100 * `cluster.2.overlap.percent`,
+      log2_size_sub  = log2(pmax(`cluster.2_total_cell_num`, 1)),
+      log2_size_main = log2(pmax(`cluster.1_total_cell_num`, 1)),
+      log2_ei_sub    = log2(pmax(`cluster.2_E_I_Ratio`, 1e-6)),
+      log2_ei_main   = log2(pmax(`cluster.1_E_I_Ratio`, 1e-6))
     )
 } else {
   dfC <- dfC_raw %>%
     mutate(
-      overlap_sub_pct = 100 * cluster.1.overlap.percent,
-      log2_size_sub  = log2(pmax(cluster.1_total_cell_num, 1)),
-      log2_size_main = log2(pmax(cluster.2_total_cell_num, 1)),
-      log2_ei_sub    = log2(pmax(cluster.1_E_I_Ratio, 1e-6)),
-      log2_ei_main   = log2(pmax(cluster.2_E_I_Ratio, 1e-6))
+      overlap_sub_pct = 100 * `cluster.1.overlap.percent`,
+      log2_size_sub  = log2(pmax(`cluster.1_total_cell_num`, 1)),
+      log2_size_main = log2(pmax(`cluster.2_total_cell_num`, 1)),
+      log2_ei_sub    = log2(pmax(`cluster.1_E_I_Ratio`, 1e-6)),
+      log2_ei_main   = log2(pmax(`cluster.2_E_I_Ratio`, 1e-6))
     )
 }
 
-dfC$overlap_bin <- cut(dfC$overlap_sub_pct,
-                       breaks=c(0,20,40,60,80,100),
-                       include.lowest=TRUE,
-                       labels=bin_levels)
+bin_levels <- c("0–20%","20–40%","40–60%","60–80%","80–100%")
+dfC$overlap_bin <- cut(
+  dfC$overlap_sub_pct, breaks = c(0,20,40,60,80,100),
+  include.lowest = TRUE, labels = bin_levels
+)
 
-c_cols <- bin_pal
+c_cols <- c("0–20%"="#EAE2BD","20–40%"="#C7E2D5","40–60%"="#59A8A2",
+            "60–80%"="#2E74A6","80–100%"="#234663")
+
 size_limits <- c(2.5, 12.5); size_breaks <- seq(2.5, 12.5, 2.5)
 eir_limits  <- c(-2.5, 7.5);  eir_breaks  <- seq(-2.5, 7.5, 2.5)
 
 make_scatter_regline <- function(dsub, x, y, xlabel, ylabel, title, col,
                                  xlim, ylim, xbr, ybr){
   ggplot(dsub, aes({{x}}, {{y}})) +
-    geom_point(alpha=0.35, size=0.8, color=col) +
-    geom_smooth(method="lm", se=TRUE, color="black", linetype=2, linewidth=0.7) +
-    stat_cor(method="pearson", label.x.npc="left", label.y.npc="top", size=4) +
-    labs(x=xlabel, y=ylabel, title=title) +
-    scale_x_continuous(limits=xlim, breaks=xbr) +
-    scale_y_continuous(limits=ylim, breaks=ybr) +
-    theme_classic(base_size=12) +
-    theme(plot.title=element_text(face="bold", hjust=0.5),
-          panel.border=element_rect(color="black", fill=NA, linewidth=0.6))
+    geom_point(alpha = 0.35, size = 0.8, color = col) +
+    geom_smooth(method = "lm", se = TRUE, color = "black",
+                linetype = 2, linewidth = 0.7) +
+    stat_cor(method = "pearson",
+             label.x.npc = "left", label.y.npc = "top", size = 4) +
+    labs(x = xlabel, y = ylabel, title = title) +
+    scale_x_continuous(limits = xlim, breaks = xbr) +
+    scale_y_continuous(limits = ylim, breaks = ybr) +
+    theme_classic(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6)
+    )
 }
 
 make_scatter_marginal <- function(dsub, x, y, xlabel, ylabel, title, col,
                                   xlim, ylim, xbr, ybr){
   p <- ggplot(dsub, aes({{x}}, {{y}})) +
-    geom_point(alpha=0.35, size=0.8, color=col) +
-    geom_smooth(method="lm", se=FALSE, color="black", linewidth=0.7) +
-    stat_cor(method="pearson", label.x.npc="left", label.y.npc="top", size=4) +
-    labs(x=xlabel, y=ylabel, title=title) +
-    scale_x_continuous(limits=xlim, breaks=xbr) +
-    scale_y_continuous(limits=ylim, breaks=ybr) +
-    theme_bw(base_size=12) +
-    theme(panel.grid=element_blank(),
-          plot.title=element_text(face="bold", hjust=0.5))
-  ggMarginal(p, type="histogram", fill=col, alpha=0.5, bins=30)
+    geom_point(alpha = 0.35, size = 0.8, color = col) +
+    geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 0.7) +
+    stat_cor(method = "pearson",
+             label.x.npc = "left", label.y.npc = "top", size = 4) +
+    labs(x = xlabel, y = ylabel, title = title) +
+    scale_x_continuous(limits = xlim, breaks = xbr) +
+    scale_y_continuous(limits = ylim, breaks = ybr) +
+    theme_bw(base_size = 12) +
+    theme(
+      panel.grid = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5)
+    )
+  ggMarginal(p, type = "histogram", fill = col, alpha = 0.5, bins = 30)
 }
 
 make_scatter_density <- function(dsub, x, y, xlabel, ylabel, title, col,
                                  xlim, ylim, xbr, ybr){
   ggplot(dsub, aes({{x}}, {{y}})) +
-    stat_density_2d(aes(fill=..level..), geom="polygon", color=NA, alpha=0.8) +
-    scale_fill_viridis(option="C", direction=-1, guide="none") +
-    geom_point(alpha=0.15, size=0.5, color=col) +
-    geom_smooth(method="lm", se=FALSE, color="black", linewidth=0.7) +
-    stat_cor(method="pearson", label.x.npc="left", label.y.npc="top", size=4) +
-    labs(x=xlabel, y=ylabel, title=title) +
-    scale_x_continuous(limits=xlim, breaks=xbr) +
-    scale_y_continuous(limits=ylim, breaks=ybr) +
-    theme_minimal(base_size=12) +
-    theme(panel.grid.minor=element_blank(),
-          plot.title=element_text(face="bold", hjust=0.5),
-          panel.border=element_rect(color="black", fill=NA, linewidth=0.6))
+    stat_density_2d(aes(fill = ..level..), geom = "polygon",
+                    color = NA, alpha = 0.8) +
+    scale_fill_viridis(option = "C", direction = -1, guide = "none") +
+    geom_point(alpha = 0.15, size = 0.5, color = col) +
+    geom_smooth(method = "lm", se = FALSE, color = "black", linewidth = 0.7) +
+    stat_cor(method = "pearson",
+             label.x.npc = "left", label.y.npc = "top", size = 4) +
+    labs(x = xlabel, y = ylabel, title = title) +
+    scale_x_continuous(limits = xlim, breaks = xbr) +
+    scale_y_continuous(limits = ylim, breaks = ybr) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6)
+    )
 }
 
 build_grid_and_save <- function(fun_builder, tag){
@@ -2453,50 +2128,67 @@ build_grid_and_save <- function(fun_builder, tag){
   for (b in bin_levels) {
     dsub <- dfC %>% filter(overlap_bin == b)
     colb <- c_cols[b]
-    p_size <- fun_builder(dsub, log2_size_sub, log2_size_main,
+    p_size <- fun_builder(dsub,
+                          log2_size_sub, log2_size_main,
                           "log2 Main Cluster Size", "log2 Sub Cluster Size",
-                          b, colb, size_limits, size_limits, size_breaks, size_breaks)
-    p_eir  <- fun_builder(dsub, log2_ei_main, log2_ei_sub,
+                          b, colb, size_limits, size_limits,
+                          size_breaks, size_breaks)
+    p_eir  <- fun_builder(dsub,
+                          log2_ei_main,  log2_ei_sub,
                           "log2 Main E–I Ratio", "log2 Sub E–I Ratio",
-                          b, colb, eir_limits, eir_limits, eir_breaks, eir_breaks)
+                          b, colb, eir_limits, eir_limits,
+                          eir_breaks, eir_breaks)
     plist_size[[b]] <- p_size
     plist_eir[[b]]  <- p_eir
   }
-  gridp <- ggarrange(plotlist=c(plist_size, plist_eir),
-                     ncol=length(bin_levels), nrow=2,
-                     labels=c(rep("Cluster Size", length(bin_levels)),
-                              rep("E–I Ratio", length(bin_levels))),
-                     font.label=list(size=10, face="bold"),
-                     hjust=-0.2, vjust=1.2)
-  ggsave(file.path(outdir, paste0("Fig2C_", tag, "_grid.png")), gridp, width=14, height=6.2, dpi=450)
-  ggsave(file.path(outdir, paste0("Fig2C_", tag, "_grid.pdf")), gridp, width=14, height=6.2)
+  grid <- ggarrange(
+    plotlist = c(plist_size, plist_eir),
+    ncol = length(bin_levels), nrow = 2,
+    labels = c(rep("Cluster Size", length(bin_levels)),
+               rep("E–I Ratio",   length(bin_levels))),
+    font.label = list(size = 10, face = "bold"),
+    hjust = -0.2, vjust = 1.2
+  )
+  ggsave(file.path(outdir, paste0("Fig2C_", tag, "_grid.png")),
+         grid, width = 14, height = 6.2, dpi = 450)
+  ggsave(file.path(outdir, paste0("Fig2C_", tag, "_grid.pdf")),
+         grid, width = 14, height = 6.2)
 }
 
 build_grid_and_save(make_scatter_regline,  "regline")
 build_grid_and_save(make_scatter_marginal, "marginal")
 build_grid_and_save(make_scatter_density,  "density")
 
-## ================================================================
-## Fig2（Overlap violin/box + Wilcoxon）
-## ================================================================
-df_all <- tab2 %>%
+suppressPackageStartupMessages({
+  library(dplyr); library(ggplot2); library(scales); library(ggpubr)
+})
+
+tab <- read.delim(file.path(combo_root, "mouse_table", "table2", "Table_2_total_cell.txt"))
+
+df_all <- tab %>%
   mutate(
-    pair_type = paste(cluster.1_cell_Neruon_type, cluster.2_cell_Neruon_type, sep="-"),
+    pair_type = paste(cluster.1_cell_Neruon_type, cluster.2_cell_Neruon_type, sep = "-"),
     overlap2_pct = 100 * cluster.2.overlap.percent
   ) %>%
-  filter(pair_type %in% pair_levels) %>%
-  mutate(pair_type = factor(pair_type, levels = pair_levels))
+  filter(pair_type %in% c("Gaba-Gaba","Gaba-Glut","Glut-Gaba","Glut-Glut")) %>%
+  mutate(pair_type = factor(pair_type, levels = c("Gaba-Gaba","Gaba-Glut","Glut-Gaba","Glut-Glut")))
 
 pair_pal4 <- c("Gaba-Gaba"="#0072B2","Gaba-Glut"="#56B4E9","Glut-Gaba"="#009E73","Glut-Glut"="#D55E00")
 
 summary_tbl <- df_all %>%
   group_by(pair_type) %>%
-  summarise(n=n(), med=median(overlap2_pct, na.rm=TRUE), meanv=mean(overlap2_pct, na.rm=TRUE), .groups="drop") %>%
-  mutate(lab = paste0("n = ", comma(n), "\nmedian = ", round(med,1), "%\nmean = ", round(meanv,1), "%"))
+  summarise(
+    n     = n(),
+    med   = median(overlap2_pct, na.rm = TRUE),
+    meanv = mean(overlap2_pct,    na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(lab = paste0("n = ", scales::comma(n),
+                      "\nmedian = ", round(med, 1), "%\nmean = ", round(meanv, 1), "%"))
 
-y_max <- max(df_all$overlap2_pct, na.rm=TRUE)
-y_lbl <- y_max * 0.82
-y_brk <- y_max * 0.94
+y_max   <- max(df_all$overlap2_pct, na.rm = TRUE)
+y_lbl   <- y_max * 0.82
+y_brk_1 <- y_max * 0.94
 step_increase <- 0.065
 
 comparisons_all <- list(
@@ -2508,623 +2200,88 @@ comparisons_all <- list(
   c("Gaba-Gaba","Glut-Glut")
 )
 
-p_full <- ggplot(df_all, aes(x=pair_type, y=overlap2_pct, fill=pair_type)) +
-  geom_violin(width=0.85, alpha=0.15, color=NA, trim=TRUE) +
-  geom_boxplot(width=0.6, outlier.shape=NA, alpha=0.95, color="black") +
-  geom_label(data=transform(summary_tbl, y=y_lbl),
-             aes(x=pair_type, y=y, label=lab),
-             inherit.aes=FALSE, size=3.8, fontface="bold",
-             label.size=0.25, label.r=unit(2.5,"pt"),
-             fill="white", color="black") +
-  stat_compare_means(comparisons=comparisons_all, method="wilcox.test",
-                     label="p.format", tip.length=0.01, bracket.size=0.45,
-                     size=4.1, hide.ns=TRUE,
-                     step.increase=step_increase, label.y=y_brk) +
-  scale_fill_manual(values=pair_pal4, guide="none") +
-  scale_y_continuous(expand=expansion(mult=c(0.02,0.28))) +
-  labs(title="Overlap distribution with pairwise Wilcoxon tests", x=NULL, y="Cluster2 overlap (%)") +
-  theme_classic(base_size=12) +
-  theme(panel.border=element_rect(color="black", fill=NA, linewidth=0.6),
-        plot.title=element_text(hjust=0.5, face="bold"),
-        axis.text.x=element_text(face="bold"))
+p_full <- ggplot(df_all, aes(x = pair_type, y = overlap2_pct, fill = pair_type)) +
+  geom_violin(width = 0.85, alpha = 0.15, color = NA, trim = TRUE) +
+  geom_boxplot(width = 0.6, outlier.shape = NA, alpha = 0.95, color = "black") +
+  geom_label(
+    data = transform(summary_tbl, y = y_lbl),
+    aes(x = pair_type, y = y, label = lab),
+    inherit.aes = FALSE,
+    size = 3.8, fontface = "bold",
+    label.size = 0.25, label.r = unit(2.5, "pt"),
+    fill = "white", color = "black"
+  ) +
+  stat_compare_means(
+    comparisons = comparisons_all, method = "wilcox.test",
+    label = "p.format", tip.length = 0.01, bracket.size = 0.45,
+    size = 4.1, hide.ns = TRUE,
+    step.increase = step_increase,
+    label.y = y_brk_1
+  ) +
+  scale_fill_manual(values = pair_pal4, guide = "none") +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.28))) +
+  labs(title = "Overlap distribution with pairwise Wilcoxon tests",
+       x = NULL, y = "Cluster2 overlap (%)") +
+  theme_classic(base_size = 12) +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+    plot.title   = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x  = element_text(face = "bold")
+  )
 
-ggsave(file.path(outdir, "Fig_box_overlaps_pairwise_wilcox_WITH_NUMBERS_neat.pdf"), p_full, width=8.6, height=6.9, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig_box_overlaps_pairwise_wilcox_WITH_NUMBERS_neat.png"), p_full, width=8.6, height=6.9, dpi=450)
+ggsave(file.path(outdir, "Fig_box_overlaps_pairwise_wilcox_WITH_NUMBERS_neat.pdf"),
+       p_full, width = 8.6, height = 6.9, device = cairo_pdf)
+ggsave(file.path(outdir, "Fig_box_overlaps_pairwise_wilcox_WITH_NUMBERS_neat.png"),
+       p_full, width = 8.6, height = 6.9, dpi = 450)
 
-df_2dir <- df_all %>% filter(pair_type %in% c("Glut-Gaba","Gaba-Glut")) %>% droplevels()
+df_2dir <- df_all %>%
+  filter(pair_type %in% c("Glut-Gaba","Gaba-Glut")) %>%
+  droplevels()
+
 summary_2dir <- df_2dir %>%
   group_by(pair_type) %>%
-  summarise(n=n(), med=median(overlap2_pct, na.rm=TRUE), meanv=mean(overlap2_pct, na.rm=TRUE), .groups="drop") %>%
-  mutate(lab = paste0("n = ", comma(n), "\nmedian = ", round(med,1), "%\nmean = ", round(meanv,1), "%"))
+  summarise(
+    n     = n(),
+    med   = median(overlap2_pct, na.rm = TRUE),
+    meanv = mean(overlap2_pct,    na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(lab = paste0("n = ", scales::comma(n),
+                      "\nmedian = ", round(med, 1), "%\nmean = ", round(meanv, 1), "%"))
 
-y_max2 <- max(df_2dir$overlap2_pct, na.rm=TRUE)
+y_max2 <- max(df_2dir$overlap2_pct, na.rm = TRUE)
 y_lbl2 <- y_max2 * 0.80
 y_brk2 <- y_max2 * 0.92
 
-p_2dir <- ggplot(df_2dir, aes(x=pair_type, y=overlap2_pct, fill=pair_type)) +
-  geom_violin(width=0.85, alpha=0.15, color=NA, trim=TRUE) +
-  geom_boxplot(width=0.6, outlier.shape=NA, alpha=0.95, color="black") +
-  geom_label(data=transform(summary_2dir, y=y_lbl2),
-             aes(x=pair_type, y=y, label=lab),
-             inherit.aes=FALSE, size=4.0, fontface="bold",
-             label.size=0.25, label.r=unit(2.5,"pt"),
-             fill="white", color="black") +
-  stat_compare_means(comparisons=list(c("Glut-Gaba","Gaba-Glut")),
-                     method="wilcox.test", label="p.format",
-                     tip.length=0.01, bracket.size=0.5, size=4.6,
-                     hide.ns=TRUE, label.y=y_brk2) +
-  scale_fill_manual(values=pair_pal4[c("Gaba-Glut","Glut-Gaba")], guide="none") +
-  scale_y_continuous(expand=expansion(mult=c(0.02,0.22))) +
-  labs(title="Overlap: Glut→Gaba vs Gaba→Glut (Wilcoxon)", x=NULL, y="Cluster2 overlap (%)") +
-  theme_classic(base_size=12) +
-  theme(panel.border=element_rect(color="black", fill=NA, linewidth=0.6),
-        plot.title=element_text(hjust=0.5, face="bold"),
-        axis.text.x=element_text(face="bold"))
-
-ggsave(file.path(outdir, "Fig_box_overlaps_GlutGaba_vs_GabaGlut_WITH_NUMBERS.pdf"), p_2dir, width=6.6, height=6.2, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig_box_overlaps_GlutGaba_vs_GabaGlut_WITH_NUMBERS.png"), p_2dir, width=6.6, height=6.2, dpi=450)
-
-## ================================================================
-## Fig2D–H（cluster口径版）：聚焦 PVALB / SOM / VIP 的配对分析
-## 口径统一为“unique partner cluster 数”（n_distinct(partner_cluster_id)）
-## ================================================================
-
-suppressPackageStartupMessages({
-  library(dplyr)
-  library(stringr)
-  library(tidyr)
-  library(forcats)
-  library(ggplot2)
-  library(scales)
-  library(viridis)
-})
-
-stopifnot(exists("tab2"))    # 你的 Table_2_total_cell 处理后的表
-stopifnot(exists("outdir"))
-stopifnot(exists("theme_paper"))  # 你前面定义的论文风主题
-
-## ---------- 0) subclass group mapping ----------
-map_subclass_group <- function(x){
-  x0 <- tolower(as.character(x))
-  out <- rep("Other", length(x0))
-  out[grepl("pvalb|parvalb|parvalbumin", x0)] <- "PVALB"
-  out[grepl("som|sst|somatostatin", x0)]       <- "SOM"
-  out[grepl("\\bvip\\b", x0)]                  <- "VIP"
-  factor(out, levels = c("PVALB","SOM","VIP","Other"))
-}
-
-focus_levels   <- c("PVALB","SOM","VIP")
-partner_levels <- c("Glut","Gaba","NonNeuron")
-
-pal_focus <- c("PVALB"="#7B3294","SOM"="#008837","VIP"="#E08214")
-pal_type  <- c("Glut"="#D55E00","Gaba"="#0072B2","NonNeuron"="#666666")
-
-## ---------- 1) 找到 cluster 唯一ID列（必须是“cluster级唯一标识”，不是cell数） ----------
-pick_id_col <- function(nms, side = c("1","2")){
-  side <- match.arg(side)
-  cand <- c(
-    paste0("cluster.", side, "_label"),
-    paste0("cluster.", side, "_cluster_label"),
-    paste0("cluster.", side, "_id"),
-    paste0("cluster.", side, "_cluster_id"),
-    paste0("cluster.", side, "_cluster"),
-    paste0("cluster.", side, "_name")
-  )
-  hit <- intersect(cand, nms)
-  if (length(hit) == 0) {
-    stop("❌ 找不到 cluster 唯一ID列：请确认 Table_2_total_cell.txt 是否含 cluster.1_label / cluster.2_label（或 *_id）。")
-  }
-  hit[1]
-}
-id1 <- pick_id_col(names(tab2), "1")
-id2 <- pick_id_col(names(tab2), "2")
-
-## ---------- 2) 清洗 subclass 名称（用于画Top partner subclass） ----------
-clean_subclass_name <- function(x){
-  x %>%
-    as.character() %>%
-    str_replace("^\\d+\\s+", "") %>%
-    str_replace_all("\\s+"," ") %>%
-    str_trim()
-}
-
-## ---------- 3) 构造“focus -> partner”的 cluster 记录（两侧都取一次，保证口径统一） ----------
-## 每条记录代表：某个 focus subclass（P/S/V）“捕获到”一个 partner cluster（unique by partner_cluster_id）
-df_focus_clu <- bind_rows(
-  tab2 %>%
-    mutate(focus_grp = map_subclass_group(cluster.1_subclass)) %>%
-    filter(focus_grp %in% focus_levels) %>%
-    transmute(
-      focus_subclass_group = as.character(focus_grp),
-      focus_cluster_id     = as.character(.data[[id1]]),
-      partner_cluster_id   = as.character(.data[[id2]]),
-      partner_cell_type    = as.character(cluster.2_cell_Neruon_type),
-      partner_subclass_raw = as.character(cluster.2_subclass),
-      partner_overlap_pct  = 100 * suppressWarnings(as.numeric(cluster.2.overlap.percent))
-    ),
-  tab2 %>%
-    mutate(focus_grp = map_subclass_group(cluster.2_subclass)) %>%
-    filter(focus_grp %in% focus_levels) %>%
-    transmute(
-      focus_subclass_group = as.character(focus_grp),
-      focus_cluster_id     = as.character(.data[[id2]]),
-      partner_cluster_id   = as.character(.data[[id1]]),
-      partner_cell_type    = as.character(cluster.1_cell_Neruon_type),
-      partner_subclass_raw = as.character(cluster.1_subclass),
-      partner_overlap_pct  = 100 * suppressWarnings(as.numeric(cluster.1.overlap.percent))
-    )
-) %>%
-  filter(!is.na(partner_cluster_id), !is.na(partner_cell_type)) %>%
-  filter(partner_cell_type %in% partner_levels) %>%
-  mutate(
-    focus_subclass_group = factor(focus_subclass_group, levels = focus_levels),
-    partner_cell_type    = factor(partner_cell_type, levels = partner_levels),
-    partner_subclass_clean = clean_subclass_name(partner_subclass_raw)
-  )
-
-## ✅ 核心：去重到“cluster口径”
-## 同一个 partner_cluster 只算一次（在同一 focus_subclass_group + partner_cell_type 内）
-df_focus_clu_u <- df_focus_clu %>%
-  distinct(focus_subclass_group, partner_cell_type, partner_cluster_id, partner_subclass_clean, .keep_all = TRUE)
-
-## ================================================================
-## Fig2D（cluster口径，100%堆叠）：每个 focus subclass 捕获到的
-## partner cluster（unique partner_cluster_id）的 neuron-type 构成
-## ================================================================
-
-stopifnot(exists("df_focus_clu"))  # 你前面构造的 focus->partner 记录（含 partner_cluster_id / partner_cell_type）
-focus_levels   <- c("PVALB","SOM","VIP")
-partner_levels <- c("Glut","Gaba","NonNeuron")
-
-df2D <- df_focus_clu %>%
-  filter(!is.na(partner_cell_type), !is.na(partner_cluster_id)) %>%
-  filter(as.character(focus_subclass_group) %in% focus_levels) %>%
-  filter(as.character(partner_cell_type) %in% partner_levels) %>%
-  mutate(
-    focus_subclass_group = factor(as.character(focus_subclass_group), levels = focus_levels),
-    partner_cell_type    = factor(as.character(partner_cell_type),    levels = partner_levels)
-  ) %>%
-  group_by(focus_subclass_group, partner_cell_type) %>%
-  summarise(n_cluster = n_distinct(partner_cluster_id), .groups = "drop") %>%
-  tidyr::complete(
-    focus_subclass_group = factor(focus_levels, levels = focus_levels),
-    partner_cell_type    = factor(partner_levels, levels = partner_levels),
-    fill = list(n_cluster = 0L)
-  ) %>%
-  group_by(focus_subclass_group) %>%
-  mutate(
-    total_cluster = sum(n_cluster),
-    pct      = ifelse(total_cluster > 0, n_cluster / total_cluster, 0),
-    pct_lab  = scales::percent(pct, accuracy = 0.1),
-    show_lab = pct >= 0.03
-  ) %>%
-  ungroup()
-
-## ✅ 自检：每个 focus 的 pct 之和必须 = 1（或非常接近 1）
-print(df2D %>% group_by(focus_subclass_group) %>% summarise(sum_pct = sum(pct), total = sum(n_cluster)))
-
-p2D <- ggplot(df2D, aes(x = focus_subclass_group, y = pct, fill = partner_cell_type)) +
-  geom_col(width = 0.72, color = "black", linewidth = 0.25) +
-  geom_text(
-    data = df2D %>% filter(show_lab),
-    aes(label = pct_lab),
-    position = position_stack(vjust = 0.5),
-    size = 4.0, fontface = "bold", color = "white"
+p_2dir <- ggplot(df_2dir, aes(x = pair_type, y = overlap2_pct, fill = pair_type)) +
+  geom_violin(width = 0.85, alpha = 0.15, color = NA, trim = TRUE) +
+  geom_boxplot(width = 0.6, outlier.shape = NA, alpha = 0.95, color = "black") +
+  geom_label(
+    data = transform(summary_2dir, y = y_lbl2),
+    aes(x = pair_type, y = y, label = lab),
+    inherit.aes = FALSE,
+    size = 4.0, fontface = "bold",
+    label.size = 0.25, label.r = unit(2.5, "pt"),
+    fill = "white", color = "black"
   ) +
-  scale_fill_manual(values = pal_type, name = "Partner neuron type") +
-  scale_y_continuous(
-    labels = scales::percent_format(accuracy = 1),
-    breaks = seq(0, 1, 0.25),
-    limits = c(0, 1),
-    expand = c(0, 0)
+  stat_compare_means(
+    comparisons = list(c("Glut-Gaba","Gaba-Glut")),
+    method = "wilcox.test", label = "p.format",
+    tip.length = 0.01, bracket.size = 0.5, size = 4.6,
+    hide.ns = TRUE, label.y = y_brk2
   ) +
-  labs(
-    title = "Focus subclasses: partner neuron-type composition (unique partner clusters)",
-    x = NULL, y = "Proportion within focus subclass"
-  ) +
-  theme_paper(12)
-
-ggsave(file.path(outdir, "Fig2D_focusSubclass_partnerNeuronType_100stack_CLUSTER.pdf"),
-       p2D, width = 7.2, height = 5.2, device = cairo_pdf)
-ggsave(file.path(outdir, "Fig2D_focusSubclass_partnerNeuronType_100stack_CLUSTER.png"),
-       p2D, width = 7.2, height = 5.2, dpi = 450)
-
-
-## ================================================================
-## Fig2E（cluster口径）：Top partner subclasses（按 unique partner cluster 数量）
-## ================================================================
-topN_partner <- 15L
-
-df2E <- df_focus_clu_u %>%
-  count(focus_subclass_group, partner_subclass_clean, name = "n_cluster") %>%
-  group_by(focus_subclass_group) %>%
-  slice_max(n_cluster, n = topN_partner, with_ties = FALSE) %>%
-  ungroup() %>%
-  group_by(focus_subclass_group) %>%
-  arrange(n_cluster, partner_subclass_clean, .by_group = TRUE) %>%
-  mutate(y_key = paste0(partner_subclass_clean, "___", focus_subclass_group)) %>%
-  ungroup()
-
-y_levels_2E <- df2E %>%
-  distinct(focus_subclass_group, y_key, n_cluster) %>%
-  group_by(focus_subclass_group) %>%
-  arrange(n_cluster, y_key, .by_group = TRUE) %>%
-  pull(y_key)
-
-df2E$y_key <- factor(df2E$y_key, levels = y_levels_2E)
-
-p2E <- ggplot(df2E, aes(x = n_cluster, y = y_key, fill = focus_subclass_group)) +
-  geom_col(width = 0.68, color = "black", linewidth = 0.20) +
-  geom_text(aes(label = comma(n_cluster)), hjust = -0.12, size = 3.8, fontface = "bold") +
-  facet_wrap(~ focus_subclass_group, scales = "free_y", ncol = 1) +
-  scale_y_discrete(labels = function(x) sub("___.*$", "", x)) +
-  scale_fill_manual(values = pal_focus, guide = "none") +
-  scale_x_continuous(expand = expansion(mult = c(0, 0.14))) +
-  labs(
-    title = sprintf("Top %d partner subclasses (unique partner clusters)", topN_partner),
-    x = "Unique partner cluster count", y = NULL
-  ) +
-  theme_paper(11) +
+  scale_fill_manual(values = pair_pal4[c("Gaba-Glut","Glut-Gaba")], guide = "none") +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.22))) +
+  labs(title = "Overlap: Glut→Gaba vs Gaba→Glut (Wilcoxon)",
+       x = NULL, y = "Cluster2 overlap (%)") +
+  theme_classic(base_size = 12) +
   theme(
-    strip.text  = element_text(face = "bold"),
-    axis.text.y = element_text(size = 11, face = "bold")
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+    plot.title   = element_text(hjust = 0.5, face = "bold"),
+    axis.text.x  = element_text(face = "bold")
   )
 
-ggsave(file.path(outdir, "Fig2E_focusSubclass_topPartnerSubclass_facet_CLUSTER.pdf"),
-       p2E, width = 8.2, height = 10.2, device = cairo_pdf)
-ggsave(file.path(outdir, "Fig2E_focusSubclass_topPartnerSubclass_facet_CLUSTER.png"),
-       p2E, width = 8.2, height = 10.2, dpi = 450)
-
-## ================================================================
-## Fig2E2（cluster口径）: 参考图样式（3列 focus × 3行 partner type）
-## - 每个小面板：该 focus + 该 partner_cell_type 的 Top5 partner subclasses
-## - 统计口径：unique partner clusters 数量（n_cluster）
-## 依赖：dplyr/ggplot2/scales/stringr/forcats/cowplot
-## 输入：df_focus_clu_u 需含：
-##   focus_subclass_group, partner_cell_type, partner_subclass_clean,
-##   （可选）partner_cluster_id ——若存在会再 distinct 一次更稳
-## 输出：Fig2E2_focusSubclass_Top5_byPartnerType_CLUSTER_refStyle.*
-## ================================================================
-suppressPackageStartupMessages({
-  library(dplyr)
-  library(ggplot2)
-  library(scales)
-  library(stringr)
-  library(forcats)
-  library(cowplot)
-})
-
-stopifnot(exists("df_focus_clu_u"))
-stopifnot(exists("outdir"))
-
-focus_levels_plot   <- c("PVALB","SOM","VIP")
-partner_levels_plot <- c("Glut","Gaba","NonNeuron")
-
-std_partner_type <- function(x){
-  x <- trimws(as.character(x))
-  dplyr::case_when(
-    grepl("^glut", x, ignore.case = TRUE) ~ "Glut",
-    grepl("^gaba", x, ignore.case = TRUE) ~ "Gaba",
-    grepl("^non",  x, ignore.case = TRUE) ~ "NonNeuron",
-    TRUE ~ x
-  )
-}
-
-## 参考图配色（你想沿用原 pal_type 也可以把这一行换成 pal_type）
-pal_type_ref <- c(Glut="#4C78A8", Gaba="#54A24B", NonNeuron="#F58518")
-
-topK_each_type <- 5L
-
-dfE_base <- df_focus_clu_u %>%
-  mutate(
-    focus_subclass_group   = factor(trimws(as.character(focus_subclass_group)), levels = focus_levels_plot),
-    partner_cell_type      = factor(std_partner_type(partner_cell_type), levels = partner_levels_plot),
-    partner_subclass_clean = trimws(as.character(partner_subclass_clean))
-  ) %>%
-  filter(!is.na(focus_subclass_group), !is.na(partner_cell_type), !is.na(partner_subclass_clean))
-
-## 计数：unique partner clusters
-dfE_cnt <- dfE_base %>%
-  { if ("partner_cluster_id" %in% names(.)) distinct(., focus_subclass_group, partner_cell_type, partner_subclass_clean, partner_cluster_id) else . } %>%
-  count(focus_subclass_group, partner_cell_type, partner_subclass_clean, name = "n_cluster")
-
-## 每个 focus × type 取 Top5
-dfE_top5 <- dfE_cnt %>%
-  group_by(focus_subclass_group, partner_cell_type) %>%
-  slice_max(n_cluster, n = topK_each_type, with_ties = FALSE) %>%
-  ungroup()
-
-plot_E2_focus <- function(focus_nm){
-  dd <- dfE_top5 %>%
-    filter(focus_subclass_group == focus_nm) %>%
-    group_by(partner_cell_type) %>%
-    arrange(n_cluster, partner_subclass_clean, .by_group = TRUE) %>%
-    mutate(
-      ## ✅ 关键：把 focus 拼进去，保证 y_key 全局唯一（避免 duplicated levels）
-      y_key = paste0(partner_subclass_clean, "___", partner_cell_type, "___", focus_subclass_group)
-    ) %>%
-    ungroup()
-  
-  ## ✅ 关键：每张子图内部自己定义 levels，并去重
-  y_lv <- dd %>%
-    group_by(partner_cell_type) %>%
-    arrange(n_cluster, partner_subclass_clean, .by_group = TRUE) %>%
-    pull(y_key) %>%
-    unique()
-  
-  dd$y_key <- factor(dd$y_key, levels = y_lv)
-  
-  ggplot(dd, aes(x = n_cluster, y = y_key, fill = partner_cell_type)) +
-    geom_col(width = 0.75, color="black", linewidth=0.25) +
-    geom_text(aes(label = comma(n_cluster)), hjust = -0.10, size = 3.0, fontface="bold") +
-    facet_wrap(~ partner_cell_type, ncol = 1, scales = "free") +
-    ## ✅ y 轴只显示 subclass 名（去掉后面拼接的 type + focus）
-    scale_y_discrete(labels = function(x) sub("___.*$", "", x)) +
-    scale_fill_manual(values = pal_type_ref, drop = FALSE) +
-    scale_x_continuous(expand = expansion(mult = c(0, 0.18))) +
-    labs(
-      title = sprintf("%s: Top %d partner subclasses", focus_nm, topK_each_type),
-      x = "Unique partner cluster count",
-      y = NULL
-    ) +
-    theme_bw(base_size = 11) +
-    theme(
-      legend.position    = "none",
-      panel.grid.major.y = element_blank(),
-      panel.grid.minor   = element_blank(),
-      strip.background   = element_rect(fill = "grey92", color="black", linewidth=0.25),
-      strip.text         = element_text(face="bold", size=10),
-      plot.title         = element_text(face="bold", hjust=0.5, size=11),
-      axis.text.y        = element_text(face="bold", size=8.8),
-      axis.title.x       = element_text(face="bold"),
-      plot.margin        = margin(5.5, 5.5, 5.5, 5.5)
-    ) +
-    coord_cartesian(clip = "off")
-}
-
-p_list <- lapply(focus_levels_plot, plot_E2_focus)
-p2E2   <- cowplot::plot_grid(plotlist = p_list, nrow = 1, align = "hv")
-
-
-ggsave(file.path(outdir, "Fig2E2_focusSubclass_Top5_byPartnerType_CLUSTER_refStyle.pdf"),
-       p2E2, width = 13.8, height = 4.6, device = cairo_pdf)
-ggsave(file.path(outdir, "Fig2E2_focusSubclass_Top5_byPartnerType_CLUSTER_refStyle.png"),
-       p2E2, width = 13.8, height = 4.6, dpi = 450)
-
-
-## ================================================================
-## Fig2G（cluster口径）：Overlap 分布
-## 关键变化：一个 partner cluster 可能和多个 focus cluster 配对 -> 先聚合到 cluster-level
-## 建议取 max overlap（代表“该 partner cluster 被该 focus subclass 捕获到的最强重叠”）
-## ================================================================
-df2G <- df_focus_clu %>%
-  filter(!is.na(partner_overlap_pct)) %>%
-  mutate(partner_overlap_pct = pmin(pmax(partner_overlap_pct, 0), 100)) %>%
-  group_by(focus_subclass_group, partner_cell_type, partner_cluster_id) %>%
-  summarise(
-    partner_overlap_pct = max(partner_overlap_pct, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  mutate(
-    focus_subclass_group = factor(focus_subclass_group, levels = focus_levels),
-    partner_cell_type    = factor(partner_cell_type, levels = partner_levels)
-  )
-
-p2G <- ggplot(df2G, aes(x = partner_cell_type, y = partner_overlap_pct, fill = partner_cell_type)) +
-  geom_violin(width = 0.85, alpha = 0.18, color = NA, trim = TRUE) +
-  geom_boxplot(width = 0.55, outlier.shape = NA, alpha = 0.95, color = "black") +
-  facet_wrap(~ focus_subclass_group, ncol = 3, scales = "free_y") +
-  scale_fill_manual(values = pal_type, guide = "none") +
-  scale_y_continuous(expand = expansion(mult = c(0.02, 0.10))) +
-  labs(
-    title = "Overlap distribution (cluster-level, max overlap per partner cluster)",
-    subtitle = "Each partner cluster contributes once per focus subclass (after aggregation)",
-    x = NULL, y = "Partner overlap (%)"
-  ) +
-  theme_paper(12)
-
-ggsave(file.path(outdir, "Fig2G_focusSubclass_partnerOverlap_violinBox_CLUSTER.pdf"),
-       p2G, width = 10.2, height = 4.8, device = cairo_pdf)
-ggsave(file.path(outdir, "Fig2G_focusSubclass_partnerOverlap_violinBox_CLUSTER.png"),
-       p2G, width = 10.2, height = 4.8, dpi = 450)
-
-## ================================================================
-## Fig2H（cluster口径）：Top partner subclass 热图（计数=unique partner cluster 数）
-## ================================================================
-topM_cols <- 25L
-
-top_partners_global <- df_focus_clu_u %>%
-  count(partner_subclass_clean, name = "n_cluster") %>%
-  slice_max(n_cluster, n = topM_cols, with_ties = FALSE) %>%
-  pull(partner_subclass_clean)
-
-df2H <- df_focus_clu_u %>%
-  filter(partner_subclass_clean %in% top_partners_global) %>%
-  count(focus_subclass_group, partner_subclass_clean, name = "n_cluster") %>%
-  group_by(partner_subclass_clean) %>%
-  mutate(col_sum = sum(n_cluster)) %>%
-  ungroup() %>%
-  mutate(
-    partner_subclass_clean = fct_reorder(partner_subclass_clean, col_sum),
-    focus_subclass_group   = factor(focus_subclass_group, levels = focus_levels)
-  )
-
-p2H <- ggplot(df2H, aes(x = partner_subclass_clean, y = focus_subclass_group, fill = n_cluster)) +
-  geom_tile(color = "white", linewidth = 0.25) +
-  scale_fill_gradientn(colours = viridis_pal(option = "C")(256), name = "Unique partner\ncluster count") +
-  labs(
-    title = sprintf("Heatmap of top-%d partner subclasses (cluster-level)", topM_cols),
-    x = "Partner subclass (top global)", y = NULL
-  ) +
-  theme_paper(11) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, face = "bold", size = 9),
-    axis.text.y = element_text(face = "bold"),
-    legend.position = "right"
-  )
-
-ggsave(file.path(outdir, sprintf("Fig2H_focusSubclass_top%dPartnerSubclass_heatmap_CLUSTER.pdf", topM_cols)),
-       p2H, width = 12.6, height = 3.9, device = cairo_pdf)
-ggsave(file.path(outdir, sprintf("Fig2H_focusSubclass_top%dPartnerSubclass_heatmap_CLUSTER.png", topM_cols)),
-       p2H, width = 12.6, height = 3.9, dpi = 450)
-
-
-## =========================================================
-## ✅ 统一两张图的 x 轴顺序（全局只定义一次）
-## =========================================================
-suppressPackageStartupMessages({
-  library(dplyr)
-  library(tidyr)
-  library(ggplot2)
-  library(scales)
-  library(ggtext)
-  library(grid)
-})
-
-partner_levels_plot <- c("Glut","Gaba","NonNeuron")
-focus_levels_plot   <- c("PVALB","SOM","VIP")
-
-std_partner_type <- function(x){
-  x <- trimws(as.character(x))
-  dplyr::case_when(
-    grepl("^glut", x, ignore.case = TRUE) ~ "Glut",
-    grepl("^gaba", x, ignore.case = TRUE) ~ "Gaba",
-    grepl("^non",  x, ignore.case = TRUE) ~ "NonNeuron",
-    TRUE ~ x
-  )
-}
-
-## ---- luma（若你上面已定义可删）----
-if (!exists("hex_to_luma")) {
-  hex_to_luma <- function(hex){
-    rgb <- grDevices::col2rgb(hex) / 255
-    0.2126 * rgb[1,] + 0.7152 * rgb[2,] + 0.0722 * rgb[3,]
-  }
-}
-
-## =========================================================
-## Fig2F1：Pairing intensity (unique partner clusters)
-##   ✅关键：df2F_plot 里把 partner_cell_type 清洗成标准三类 + 强制 factor 顺序
-##   ✅关键：scale_x_discrete 用 partner_levels_plot（别再用 partner_levels）
-## =========================================================
-df2F_plot <- df2F_plot %>%
-  mutate(
-    partner_cell_type    = factor(std_partner_type(partner_cell_type), levels = partner_levels_plot),
-    focus_subclass_group = factor(trimws(as.character(focus_subclass_group)), levels = focus_levels_plot)
-  )
-
-p2F_count <- ggplot(df2F_plot, aes(x=partner_cell_type, y=focus_subclass_group, fill=n)) +
-  geom_tile(color="white", linewidth=0.35) +
-  ggtext::geom_richtext(
-    aes(label = comma(n), color = text_col),
-    fill        = df2F_plot$label_bg,
-    label.color = df2F_plot$label_border,
-    label.size  = 0.25,
-    label.r     = grid::unit(0.10, "lines"),
-    fontface = "bold", size = 4.3,
-    vjust = 0.5, hjust = 0.5
-  ) +
-  scale_x_discrete(limits = partner_levels_plot, drop = FALSE) +   # ✅ 用 partner_levels_plot
-  scale_y_discrete(limits = focus_levels_plot,   drop = FALSE) +
-  scale_fill_gradientn(colours = palC, name = "Cluster count") +
-  scale_color_identity() +
-  labs(title="Pairing intensity", x="Partner neuron type", y=NULL) +
-  theme_paper(12) +
-  theme(legend.position="right", plot.title = element_text(face="bold", hjust=0.5))
-
-
-## =========================================================
-## Fig2F2：Share (cluster-based)
-##   ✅关键1：complete() 先用字符向量（focus_levels_plot/partner_levels_plot）
-##   ✅关键2：df_share_plot 必须从 df_share 来（不要对“旧 df_share_plot”再 mutate）
-##   ✅关键3：scale_x_discrete 用 partner_levels_plot
-## =========================================================
-df_share <- num_tbl %>%
-  mutate(
-    focus_subclass_group = trimws(as.character(focus_subclass_group)),
-    partner_cell_type    = std_partner_type(partner_cell_type)
-  ) %>%
-  tidyr::complete(
-    focus_subclass_group = focus_levels_plot,
-    partner_cell_type    = partner_levels_plot,
-    fill = list(n_focus_type = 0)
-  ) %>%
-  left_join(
-    den_tbl %>% mutate(partner_cell_type = std_partner_type(partner_cell_type)),
-    by = "partner_cell_type"
-  ) %>%
-  mutate(
-    n_all_type = dplyr::coalesce(as.numeric(n_all_type), 0),
-    ratio      = ifelse(n_all_type > 0, n_focus_type / n_all_type, NA_real_),
-    ratio_cap  = pmin(pmax(ratio, 0), 1.0),
-    focus_subclass_group = factor(focus_subclass_group, levels = focus_levels_plot),
-    partner_cell_type    = factor(partner_cell_type,    levels = partner_levels_plot)
-  )
-
-## ---- 0–100% 的配色映射（你上面如果已有 palR/col_fun2 可删，这里强制覆盖为 0~1）----
-palR    <- scales::viridis_pal(option="C")(256)
-col_fun2 <- scales::col_numeric(palette = palR, domain = c(0, 1.0))
-
-df_share_plot <- df_share %>%   # ✅必须从 df_share 来
-  mutate(
-    fill_hex = col_fun2(ratio_cap),
-    luma     = hex_to_luma(fill_hex),
-    text_col = ifelse(luma > 0.60, "#111111", "white"),
-    label_bg = ifelse(text_col == "white", alpha("#000000", 0.28), alpha("#FFFFFF", 0.55)),
-    label_border = alpha("#000000", 0.12),
-    label_html = paste0(
-      "<span style='font-weight:700;'>", percent(ratio, accuracy = 0.1), "</span><br>",
-      "<span style='font-size:9pt;'>", comma(n_focus_type), "/", comma(n_all_type), "</span>"
-    )
-  )
-
-p2F2_share <- ggplot(df_share_plot, aes(x = partner_cell_type, y = focus_subclass_group, fill = ratio_cap)) +
-  geom_tile(color = "white", linewidth = 0.35) +
-  ggtext::geom_richtext(
-    aes(label = label_html, color = text_col),
-    fill        = df_share_plot$label_bg,
-    label.color = df_share_plot$label_border,
-    label.size  = 0.25,
-    label.r     = grid::unit(0.10, "lines"),
-    size        = 4.2,
-    vjust       = 0.5,
-    hjust       = 0.5
-  ) +
-  scale_x_discrete(limits = partner_levels_plot, drop = FALSE) +   # ✅ 用 partner_levels_plot
-  scale_y_discrete(limits = focus_levels_plot,   drop = FALSE) +
-  scale_fill_gradientn(
-    colours = palR,
-    limits  = c(0, 1.0),
-    oob     = squish,
-    breaks  = seq(0, 1.0, by = 0.2),
-    labels  = function(x) paste0(round(100*x), "%"),
-    name    = "Share (0–100%)"
-  ) +
-  scale_color_identity() +
-  labs(
-    title    = "Partner-type share captured by each focus subclass",
-    subtitle = " ",
-    x = "Partner neuron type",
-    y = NULL
-  ) +
-  theme_paper(12) +
-  theme(
-    legend.position = "right",
-    plot.title    = element_text(face = "bold", hjust = 0.5),
-    plot.subtitle = element_text(hjust = 0.5)
-  )
-
-## =========================================================
-## ✅ 保存（文件名你按需改）
-## =========================================================
-ggsave(file.path(outdir, "Fig2F1_focusSubclass_partnerType_heatmap_CLUSTERcount.pdf"),
-       p2F_count, width=6.8, height=3.8, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig2F1_focusSubclass_partnerType_heatmap_CLUSTERcount.png"),
-       p2F_count, width=6.8, height=3.8, dpi=450)
-
-ggsave(file.path(outdir, "Fig2F2_focusSubclass_partnerType_CLUSTERshare_heatmap_0to100pct.pdf"),
-       p2F2_share, width=7.8, height=3.8, device=cairo_pdf)
-ggsave(file.path(outdir, "Fig2F2_focusSubclass_partnerType_CLUSTERshare_heatmap_0to100pct.png"),
-       p2F2_share, width=7.8, height=3.8, dpi=450)
-
-cat("DONE. Fig2F1/Fig2F2 saved to:", outdir, "\n")
+ggsave(file.path(outdir, "Fig_box_overlaps_GlutGaba_vs_GabaGlut_WITH_NUMBERS.pdf"),
+       p_2dir, width = 6.6, height = 6.2, device = cairo_pdf)
+ggsave(file.path(outdir, "Fig_box_overlaps_GlutGaba_vs_GabaGlut_WITH_NUMBERS.png"),
+       p_2dir, width = 6.6, height = 6.2, dpi = 450)

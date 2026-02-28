@@ -1,3 +1,6 @@
+###########################
+## Part 1: 距离结果抽查校验
+###########################
 rm(list = ls()); gc()
 setwd('E:/zaw/2511/mouseMerfish_zhuang_subclass')
 
@@ -9,6 +12,7 @@ suppressPackageStartupMessages({
   library(parallel)
 })
 
+## 限制 BLAS/OMP 线程，避免和并行抢核
 Sys.setenv(
   OPENBLAS_NUM_THREADS = "1",
   OMP_NUM_THREADS      = "1",
@@ -22,18 +26,22 @@ file_names <- file_names[grep('dist.txt$', file_names)]
 
 cat("[INFO] dist files:", length(file_names), "\n")
 
+## 并行设置
 workers <- max(1L, min(length(file_names), detectCores() - 1L))
 cat("[INFO] Part1 workers:", workers, "\n")
 cl1 <- makeCluster(workers)
 registerDoParallel(cl1)
 
-
+## data.table 安全合并函数
 dt_rbind <- function(...) data.table::rbindlist(list(...), use.names = TRUE, fill = TRUE)
+
+## 每个文件跑 1000 次随机抽查，返回本文件的 error rows
 error_list_all <- foreach(fn = file_names,
                           .combine      = dt_rbind,
                           .multicombine = TRUE,
                           .packages     = c("stringr","data.table")) %dopar% {
                             
+                            ## ---------- 读距离结果 ----------
                             dist_path <- file.path('./nearby_merge_regions_new/merge_regions_nearby_dist/', fn)
                             file_temp <- read.delim(
                               dist_path,
@@ -44,11 +52,13 @@ error_list_all <- foreach(fn = file_names,
                             )
                             if (!nrow(file_temp)) return(data.table())
                             
+                            ## 仅对 *cell_id* / *cell_label* 相关列强制转字符
                             id_cols1 <- grep("cell_label|cell_id", names(file_temp), ignore.case = TRUE, value = TRUE)
                             for (cc in id_cols1) {
                               file_temp[[cc]] <- as.character(file_temp[[cc]])
                             }
                             
+                            ## ---------- 读对应切片坐标文件，保证 cell_label/cell_id 为字符 ----------
                             slice_id <- str_split(fn, "\\.merge", simplify = TRUE)[, 1]
                             cell_path <- paste0(
                               'E:/zaw/2511/mouseMerfish_zhuang_subclass/neocortex_new/',
@@ -75,6 +85,7 @@ error_list_all <- foreach(fn = file_names,
                               check.names      = FALSE,
                               colClasses       = col_cls
                             )
+                            ## cell_label / cell_id 强制字符
                             if ("cell_label" %in% names(file_temp_cell)) {
                               file_temp_cell$cell_label <- as.character(file_temp_cell$cell_label)
                             }
@@ -82,10 +93,11 @@ error_list_all <- foreach(fn = file_names,
                               file_temp_cell$cell_id <- as.character(file_temp_cell$cell_id)
                             }
                             
+                            ## ---------- 随机抽查 1000 行 ----------
                             n_row <- nrow(file_temp)
                             if (n_row == 0L) return(data.table())
                             
-                            iter <- min(1000L, n_row)
+                            iter <- min(1000L, n_row)  ## 行很少时不超出
                             err_list <- vector("list", iter)
                             k <- 0L
                             
@@ -95,6 +107,7 @@ error_list_all <- foreach(fn = file_names,
                               temp1.x <- file_temp_cell[file_temp_cell$cell_label %in% temp1$cluster.1.cell_id, ]
                               temp1.y <- file_temp_cell[file_temp_cell$cell_label %in% temp1$cluster.2.cell_id, ]
                               
+                              ## 如果有一侧没取到坐标，直接跳过这一轮
                               if (nrow(temp1.x) == 0L || nrow(temp1.y) == 0L) next
                               
                               temp_xy <- rbind(temp1.x[, c('x','y')],
@@ -119,7 +132,9 @@ stopCluster(cl1)
 error_list <- error_list_all
 cat("[INFO] Part1 done. Error rows:", nrow(error_list), "\n")
 
-
+##########################################
+## Part 2: 聚合 sim 结果并生成 pairship 表
+##########################################
 rm(list = ls()); gc()
 setwd('E:/zaw/2511/mouseMerfish_zhuang_subclass')
 
@@ -151,6 +166,7 @@ registerDoParallel(cl2)
 
 dt_rbind <- function(...) data.table::rbindlist(list(...), use.names = TRUE, fill = TRUE)
 
+## 并行读入所有 sim.txt
 mouse_cluster_pairship_list <- foreach(fn = file_names,
                                        .combine      = dt_rbind,
                                        .multicombine = TRUE,
@@ -165,7 +181,8 @@ mouse_cluster_pairship_list <- foreach(fn = file_names,
                                          )
                                          
                                          if (!nrow(file_temp)) return(data.table())
-                                        
+                                         
+                                         ## 仅对 cell_id / cell_label 相关列强制转字符
                                          id_cols2 <- grep("cell_label|cell_id", names(file_temp), ignore.case = TRUE, value = TRUE)
                                          for (cc in id_cols2) {
                                            file_temp[[cc]] <- as.character(file_temp[[cc]])
@@ -181,11 +198,13 @@ rm(mouse_cluster_pairship_list); gc()
 
 cat("[INFO] nrow(mouse_cluster_pairship) =", nrow(mouse_cluster_pairship), "\n")
 
+## ========= 保持你原来逻辑：逐行 union / 排序 / 拼 label =========
 n <- nrow(mouse_cluster_pairship)
 mouse_cluster_pairship_new <- vector("list", n)
 
 for (i in seq_len(n)) {
   temp1 <- mouse_cluster_pairship[i, ]
+  ## 注意：这里转字符只在临时变量里，不改原数据列类型
   temp1.label <- union(
     as.character(temp1$cluster.1),
     as.character(temp1$cluster.2)
@@ -203,6 +222,7 @@ write.table(
   quote = FALSE, row.names = FALSE, sep = '\t'
 )
 
+## 去重逻辑保持不变（按前 4 列去重）
 mouse_cluster_pairship_new.1 <- mouse_cluster_pairship_new[
   !duplicated(mouse_cluster_pairship_new[, c(1,2,5,6)])
 ]

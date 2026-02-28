@@ -12,6 +12,7 @@ suppressPackageStartupMessages({
 
 start_time.t <- Sys.time()
 
+## ================== 参数与工具 ==================
 ws_env <- Sys.getenv("WINDOW_SIZE", "0.4")
 ss_env <- Sys.getenv("STEP_SIZE",  "0.02")
 window_size <- as.numeric(ws_env)
@@ -41,19 +42,23 @@ dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 cat("[INFO] Output dir: ", out_dir, "\n")
 cat(sprintf("[INFO] window_size=%s step_size=%s\n", fmt(window_size), fmt(step_size)))
 
+## ================== 开启并行（按切片并行） ==================
 n_cores <- max(1L, min(parallel::detectCores(logical = TRUE) - 1L, length(file_names)))
 cat("[INFO] Using", n_cores, "cores via doParallel\n")
 
 cl <- parallel::makeCluster(n_cores)
 doParallel::registerDoParallel(cl)
 
+## 为了避免 data.table 在每个 worker 内再开多线程导致过度竞争，这里限制为 1 线程
 parallel::clusterEvalQ(cl, {
   data.table::setDTthreads(1L)
   NULL
 })
 
+## ================== 并行处理每个文件 ==================
 res_log <- foreach(file_name = file_names,
                    .packages = c("data.table", "stringr")) %dopar% {
+                     ## 每个 worker 自己计时
                      start_time <- Sys.time()
                      msg_prefix <- paste0("[", file_name, "] ")
                      
@@ -63,7 +68,8 @@ res_log <- foreach(file_name = file_names,
                      }
                      
                      cat("\n[INFO] Processing file:", file_name, "\n")
-                    
+                     
+                     ## ========= 先只读表头，构造 colClasses，确保 cell_label / cell_id 从源头就是字符 =========
                      header_dt <- read.delim(
                        fpath,
                        nrows            = 0,
@@ -91,6 +97,7 @@ res_log <- foreach(file_name = file_names,
                      cat("[DEBUG]", msg_prefix, "file_tmp loaded:",
                          nrow(file_tmp), "rows x", ncol(file_tmp), "cols\n")
                      
+                     ## 再保险：强制 cell_label / cell_id 为字符
                      if ("cell_label" %in% names(file_tmp)) {
                        file_tmp$cell_label <- as.character(file_tmp$cell_label)
                      }
@@ -98,6 +105,7 @@ res_log <- foreach(file_name = file_names,
                        file_tmp$cell_id <- as.character(file_tmp$cell_id)
                      }
                      
+                     ## ================== 合并注释表 ==================
                      cat("[DEBUG]", msg_prefix, "Merging Merfish_mouse_neocortex_layer_region...\n")
                      file_tmp <- merge(file_tmp,
                                        Merfish_mouse_neocortex_layer_region,
@@ -110,6 +118,7 @@ res_log <- foreach(file_name = file_names,
                                        by = 'class')
                      cat("[DEBUG]", msg_prefix, "After second merge:", dim(file_tmp)[1], "x", dim(file_tmp)[2], "\n")
                      
+                     ## 合并之后再次确保 cell_label / cell_id 仍是字符
                      if ("cell_label" %in% names(file_tmp)) {
                        file_tmp$cell_label <- as.character(file_tmp$cell_label)
                      }
@@ -118,9 +127,11 @@ res_log <- foreach(file_name = file_names,
                      }
                      
                      file_chose_names <- sub("\\.txt$", "", file_name)
-                    
+                     
+                     ## 转成 data.table
                      setDT(file_tmp)
                      
+                     ## ================== 定义滑窗函数（依赖 file_tmp_layer / min_y / step_size / window_size） ==================
                      cell_windows_function <- function(y_idx) {
                        y_low  <- min_y + y_idx * step_size
                        y_high <- y_low + window_size
@@ -168,6 +179,7 @@ res_log <- foreach(file_name = file_names,
                        if (k) rbindlist(res_list[1:k]) else NULL
                      }
                      
+                     ## ================== 按 layer 做滑窗 ==================
                      layer_number      <- 1L
                      cell_windows_list <- list()
                      
@@ -180,6 +192,7 @@ res_log <- foreach(file_name = file_names,
                          next
                        }
                        
+                       ## 每个 layer 内再次保证 cell_label 为字符
                        if ("cell_label" %in% names(file_tmp_layer)) {
                          file_tmp_layer[, cell_label := as.character(cell_label)]
                        }
@@ -203,6 +216,7 @@ res_log <- foreach(file_name = file_names,
                        }
                      }
                      
+                     ## ================== 汇总所有 layer 的窗口 ==================
                      cat("[DEBUG]", msg_prefix, "Combining layer results...\n")
                      if (length(cell_windows_list) == 0) {
                        warn_msg <- paste0(msg_prefix, "ERROR: No layers produced results! Skip saving.")
@@ -238,6 +252,7 @@ res_log <- foreach(file_name = file_names,
                      log_msg
                    }
 
+## 关闭并行
 parallel::stopCluster(cl)
 
 end_time.t <- Sys.time()

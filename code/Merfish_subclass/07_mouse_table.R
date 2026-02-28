@@ -11,6 +11,7 @@ suppressPackageStartupMessages({
 info <- function(...) cat(sprintf("[INFO %s] ", format(Sys.time(), "%F %T")),
                           sprintf(...), "\n")
 
+## 限制 BLAS/OMP 多线程，把核留给 R 并行
 Sys.setenv(
   OPENBLAS_NUM_THREADS = "1",
   OMP_NUM_THREADS      = "1",
@@ -23,7 +24,10 @@ setwd('E:/zaw/2511/mouseMerfish_zhuang_subclass')
 inp_cluster_file <- "./mouse_subclass_cluster_total.txt"
 loc_dir         <- "./merge_region"
 
-
+## ===== 小工具：只把真正的 cell_id / cell_label 列转成字符 =====
+## 规则：列名以 cell_label / cell_id / cell_ids 结尾的才算 ID 列
+##   例如：cell_label, cell_id, Glut_Neruon_cell_ids, cluster.1.cell_id
+##   不会匹配：Glut_Neruon_cell_ids_num, xxx_cell_id_count 等
 force_id_cols_char <- function(df) {
   id_cols <- names(df)[grepl("cell_label$|cell_id$|cell_ids$", names(df))]
   for (cc in id_cols) {
@@ -32,6 +36,7 @@ force_id_cols_char <- function(df) {
   df
 }
 
+## ===== 读 cluster 表 =====
 stopifnot(file.exists(inp_cluster_file))
 mouse_subclass_cluster_total <- fread(
   inp_cluster_file,
@@ -40,9 +45,10 @@ mouse_subclass_cluster_total <- fread(
   data.table  = FALSE,
   check.names = FALSE
 )
-
+## 强制所有 ID 列字符串（只动真正的 ID 列）
 mouse_subclass_cluster_total <- force_id_cols_char(mouse_subclass_cluster_total)
 
+## 明确把 count 列转为 numeric，避免被当成字符
 num_cols <- c("total_cell_num",
               "Glut_Neruon_cell_ids_num",
               "GABA_Neruon_cell_ids_num")
@@ -65,6 +71,7 @@ if (length(miss_cluster)) {
                paste(miss_cluster, collapse = ",")))
 }
 
+## ===== Cauchy combination (ACAT-style) =====
 cauchy_combination_test <- function(pvals, weights = NULL) {
   pvals <- as.numeric(pvals)
   pvals[pvals < 1e-15]     <- 1e-15
@@ -74,6 +81,7 @@ cauchy_combination_test <- function(pvals, weights = NULL) {
   0.5 - atan(t_stat) / pi
 }
 
+## ===== 扫描 merged region loc 文件（并行 ACAT） =====
 stopifnot(dir.exists(loc_dir))
 file_names <- list.files(loc_dir,
                          pattern = "merged_rgions_loc\\.txt$",
@@ -177,6 +185,7 @@ if (length(file_names) > 0) {
 
 info("temp.total rows=%d", nrow(temp.total))
 
+## 构造 label 与 cluster_total 对齐
 if (nrow(temp.total)) {
   temp.total$label <- paste(
     temp.total$slide,
@@ -202,6 +211,7 @@ info("labels: temp.total=%d, cluster_total=%d, intersect=%d",
      length(unique(mouse_subclass_cluster_total$label)),
      lab_int)
 
+## ===== 把 Cauchy p 合并回 cluster_total =====
 keep_cols <- c("label","cauchy_combination_p")
 mouse_subclass_cluster_total_cauchy_combination_test <-
   merge(mouse_subclass_cluster_total,
@@ -211,6 +221,7 @@ mouse_subclass_cluster_total_cauchy_combination_test <-
 info("merged rows=%d",
      nrow(mouse_subclass_cluster_total_cauchy_combination_test))
 
+## ====== Table 1 ======
 dir.create("./mouse_table", showWarnings = FALSE)
 dir.create("./mouse_table/table1", showWarnings = FALSE)
 
@@ -219,6 +230,7 @@ tab1_cols <- c("label","slide","layer","region","cell_Neuron_type","subclass",
                "GABA_Neruon_cell_ids_num","cauchy_combination_p")
 Table_1_total_cell <- mouse_subclass_cluster_total_cauchy_combination_test[, tab1_cols, drop = FALSE]
 
+## 这里 count 列已经是 numeric，可以安全做 E/I 比
 Table_1_total_cell$E_I_Ratio <- with(
   Table_1_total_cell,
   Glut_Neruon_cell_ids_num / ifelse(GABA_Neruon_cell_ids_num == 0, NA, GABA_Neruon_cell_ids_num)
@@ -228,6 +240,7 @@ fwrite(Table_1_total_cell, "./mouse_table/table1/Table_1_total_cell.txt",
        sep = "\t", quote = FALSE, row.names = FALSE)
 info("wrote Table_1_total_cell: rows=%d", nrow(Table_1_total_cell))
 
+## top-8 subclasses by cluster count
 mouse_cluster_number <- as.data.frame(
   table(mouse_subclass_cluster_total$subclass),
   stringsAsFactors = FALSE
@@ -244,6 +257,7 @@ for (cl in top_subclasses) {
   info("wrote %s (rows=%d)", outp, nrow(sub1))
 }
 
+## ====== Table 2 ======
 pairship_file <- "./mouse_cluster_pairship_new_total.txt"
 stopifnot(file.exists(pairship_file))
 mouse_cluster_pairship_new_total <- fread(
@@ -253,7 +267,7 @@ mouse_cluster_pairship_new_total <- fread(
   data.table  = FALSE,
   check.names = FALSE
 )
-
+## 只把真正 ID 列转成字符（如 cluster.1.cell_id / cluster.2.cell_id）
 mouse_cluster_pairship_new_total <- force_id_cols_char(mouse_cluster_pairship_new_total)
 
 mouse_cluster_pairship_new_total <- mouse_cluster_pairship_new_total[
@@ -272,6 +286,7 @@ mouse_cluster_pairship_new_total$label.2 <- paste(
 )
 mouse_cluster_pairship_new_total <- mouse_cluster_pairship_new_total[, c("label.1","label.2"), drop = FALSE]
 
+## 重新生成 label 以便 join
 mouse_subclass_cluster_total_cauchy_combination_test$label <- paste(
   mouse_subclass_cluster_total_cauchy_combination_test$slide,
   mouse_subclass_cluster_total_cauchy_combination_test$layer,
@@ -285,6 +300,7 @@ mouse_subclass_cluster_total$label <- paste(
   mouse_subclass_cluster_total$merge_regions, sep = "_"
 )
 
+## ====== 计算每对 cluster 间的 overlap/union（并行） ======
 dir.create("./mouse_table/table2", showWarnings = FALSE)
 
 n_pairs <- nrow(mouse_cluster_pairship_new_total)
@@ -349,6 +365,7 @@ if (n_pairs > 0) {
 
 info("pair_overlap rows=%d", nrow(pair_overlap))
 
+## ====== 用 Table_1_total_cell 拼出 Table 2 ======
 Table_1_min <- Table_1_total_cell
 
 colnames(pair_overlap)[1] <- "label"

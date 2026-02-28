@@ -8,6 +8,7 @@ library(foreach)
 library(dplyr)
 library(parallel)
 
+## 限制 BLAS / OMP 线程，避免和并行抢核
 Sys.setenv(
   OPENBLAS_NUM_THREADS = "1",
   OMP_NUM_THREADS      = "1",
@@ -20,11 +21,13 @@ setwd('E:/zaw/2511/mouseMerfish_zhuang_subclass')
 
 start_time.t <- Sys.time()
 
+## ================== 第一段：merge_region_cell_id 生成 ==================
 file_names <- list.files('E:/zaw/2511/mouseMerfish_zhuang_subclass/neocortex_new/')
 
 merged_regions_total <- list.files('E:/zaw/2511/mouseMerfish_zhuang_subclass/merge_region')
 merged_regions_total <- merged_regions_total[grep('cell_id.txt', merged_regions_total)]
 
+## 并行 backend
 workers <- max(1L, min(length(file_names), detectCores() - 1L))
 cat("[INFO] Part1 workers:", workers, "\n")
 cl1 <- makeCluster(workers)
@@ -42,6 +45,7 @@ foreach(i = file_names,
           
           if (length(merged_regions) > 0) {
             for (x in merged_regions) {
+              ## 读入 merge_region 结果，强制字符串
               temp1.cell.id <- read.delim(
                 file.path('E:/zaw/2511/mouseMerfish_zhuang_subclass/merge_region', x),
                 sep             = '\t',
@@ -50,6 +54,7 @@ foreach(i = file_names,
                 check.names      = FALSE
               )
               
+              ## 关键列保证字符（包括 ID 串）
               chr_cols <- intersect(
                 c("slide","layer","region","merge_regions","subclass",
                   "Glut_Neruon_cell_ids","GABA_Neruon_cell_ids","Non_Neruon_cell_ids"),
@@ -69,6 +74,7 @@ foreach(i = file_names,
             for (x in 1:nrow(temp1.cell.id.total)) {
               temp2 <- temp1.cell.id.total[x,]
               
+              ## 三类细胞 ID 都按字符串拆分
               temp2.cell.id.GLU <- unique(as.character(
                 str_split(temp2$Glut_Neruon_cell_ids, "[,]", simplify = TRUE)
               ))
@@ -84,14 +90,17 @@ foreach(i = file_names,
                                            temp2.cell.id.GABA,
                                            temp2.cell.id.NonNeuron))
               
+              ## cell_id 保证字符
               temp3 <- data.frame(cell_id = as.character(temp2.cell.id),
                                   stringsAsFactors = FALSE)
               
+              ## 其它列顺序不变
               temp3 <- cbind(temp2[, c(1:4, 6, 5)], temp3)
               merge_region_cell_id <- rbind(merge_region_cell_id, temp3)
             }
           }
           
+          ## 写出 merge_region_cell_id（cell_id 为字符串）
           write.table(
             merge_region_cell_id,
             file = paste(
@@ -109,6 +118,7 @@ foreach(i = file_names,
 
 stopCluster(cl1)
 
+## ================== 清环境，再跑第二段（保持你原来的习惯） ==================
 rm(list = ls()); gc()
 
 library(vroom)
@@ -141,7 +151,8 @@ foreach(i = file_names,
         .packages = c("stringr","data.table")) %dopar% {
           
           file_name <- str_split(i, "\\.txt", simplify = TRUE)[, 1]
-        
+          
+          ## ---------- 读 neocortex_new，强制 cell_label 为字符 ----------
           fpath_tmp <- paste(
             'E:/zaw/2511/mouseMerfish_zhuang_subclass/neocortex_new/', i, sep = ''
           )
@@ -177,6 +188,7 @@ foreach(i = file_names,
             file_tmp$cell_id <- as.character(file_tmp$cell_id)
           }
           
+          ## ---------- 读 merge_region_cell_id，强制 cell_id 为字符 ----------
           fpath_merge <- paste(
             'E:/zaw/2511/mouseMerfish_zhuang_subclass/nearby_merge_regions_new/merge_cell_id/',
             file_name, '.merge_region_cell_id.txt', sep = ''
@@ -227,6 +239,7 @@ foreach(i = file_names,
             temp1$merge_regions <- as.character(temp1$merge_regions)
           }
           
+          ## 如果这个切片根本没有任何 merge_region，直接写空结果并返回
           if (nrow(temp1) == 0) {
             merge_regions_nearby_dist     <- data.frame()
             merge_regions_nearby_dist_sim <- data.frame()
@@ -244,6 +257,7 @@ foreach(i = file_names,
               for (x_loc in loc_vec) {
                 temp2 <- temp1.layer[temp1.layer$loc %in% x_loc, , drop = FALSE]
                 
+                ## 这里 cell_label 和 cell_id 都是字符串
                 temp2.cell <- file_tmp[file_tmp$cell_label %in% temp2$cell_id, , drop = FALSE]
                 if (nrow(temp2.cell) == 0) next
                 
@@ -334,6 +348,7 @@ foreach(i = file_names,
             }
           }
           
+          ## 写结果
           write.table(
             merge_regions_nearby_dist,
             file = paste(

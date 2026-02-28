@@ -18,6 +18,7 @@ dir.create(out_root, recursive = TRUE, showWarnings = FALSE)
 
 file_names <- list.files(pval_root, pattern = "sig_high\\.csv$", full.names = FALSE)
 
+## 去掉可能多余的第一列（你之前的 dummy-col 逻辑）
 strip_dummy_col_if_needed <- function(dt){
   need <- c("subclass","loc","p","layer")
   if (!all(need %in% names(dt)) && ncol(dt) >= 2L) {
@@ -29,14 +30,17 @@ strip_dummy_col_if_needed <- function(dt){
 
 WS <- 0.4
 
+# --- 仅用于“文件名”的斜杠替换 ---
 safe_name <- function(x) gsub("[/\\\\]", "&", x)
 
-workers <- max(1L, parallel::detectCores() - 1L)
+## ========= 并行设置 =========
+workers <- max(1L, parallel::detectCores() - 1L)   # 视自己机器情况也可以手动写 8、12 等
 cat("[INFO] Using workers:", workers, "\n")
 
 cl <- makeCluster(workers)
 doParallel::registerDoParallel(cl)
 
+## 每个 worker 里关闭 BLAS/OMP 多线程 + data.table 线程，避免过度超线程
 clusterEvalQ(cl, {
   Sys.setenv(
     OPENBLAS_NUM_THREADS = "1",
@@ -48,6 +52,7 @@ clusterEvalQ(cl, {
   NULL
 })
 
+## ========= 并行按切片处理 =========
 foreach(
   file_name = file_names,
   .packages = c("data.table","stringr"),
@@ -56,6 +61,7 @@ foreach(
 ) %dopar% {
   message("[INFO] file: ", file_name)
   
+  ## ========= 读入 p 值文件（强制字符串） =========
   p_csv <- file.path(pval_root, file_name)
   mouse_sig_p.total <- read.csv(
     p_csv,
@@ -65,20 +71,23 @@ foreach(
   mouse_sig_p.total <- strip_dummy_col_if_needed(mouse_sig_p.total)
   stopifnot(all(c("subclass","loc","p","layer") %in% names(mouse_sig_p.total)))
   
+  ## subclass / loc / layer 统一为字符
   mouse_sig_p.total$subclass <- as.character(mouse_sig_p.total$subclass)
   mouse_sig_p.total$loc      <- as.character(mouse_sig_p.total$loc)
   mouse_sig_p.total$layer    <- as.character(mouse_sig_p.total$layer)
   
   cell_p_file_name_layer <- unique(mouse_sig_p.total$layer)
   
+  ## ========= 读入对应切片的 cell_window RData（强制 cell_label/cell_id 为字符） =========
   chip_id    <- str_split(file_name, "[_]", simplify = TRUE)[,1]
   rdata_path <- file.path(cellwin_dir, paste0(chip_id, ".RData"))
   if (!file.exists(rdata_path)) {
     message("[WARN] RData not found for chip: ", chip_id)
     return(NULL)
   }
-  load(rdata_path)
+  load(rdata_path)  # 通常包含 file_tmp, cell_windows_layer_d
   
+  ## 源数据统一字符串
   if (exists("file_tmp")) {
     if ("cell_label" %in% names(file_tmp)) {
       file_tmp$cell_label <- as.character(file_tmp$cell_label)
@@ -98,20 +107,25 @@ foreach(
     data.table::setDT(cell_windows_layer_d)
   }
   
+  ## loc_1 用 layer + loc 拼接
   cell_windows_layer_d[, layer := as.character(layer)]
   cell_windows_layer_d[, loc   := as.character(loc)]
   cell_windows_layer_d[, loc_1 := paste(layer, loc, sep = "_")]
   
+  ## ========= 按 layer 处理 =========
   for (cell_p_file_name_layer.1 in cell_p_file_name_layer) {
+    ## 当前 layer 的显著窗口结果
     cell_sliding_windows_result_p <- mouse_sig_p.total[mouse_sig_p.total$layer %in% cell_p_file_name_layer.1, ]
     if (!nrow(cell_sliding_windows_result_p)) next
     
+    ## loc 拆分 x/y
     xy_mat <- str_split(cell_sliding_windows_result_p$loc, "[_]", simplify = TRUE)
     cell_sliding_windows_result_p$xstart <- as.numeric(xy_mat[,1])
     cell_sliding_windows_result_p$ystart <- as.numeric(xy_mat[,2])
     cell_sliding_windows_result_p$xend   <- cell_sliding_windows_result_p$xstart + WS
     cell_sliding_windows_result_p$yend   <- cell_sliding_windows_result_p$ystart + WS
     
+    ## 只保留 p<0.05 的富集窗口
     Neruon_enrich <- cell_sliding_windows_result_p[cell_sliding_windows_result_p$p < 0.05, ]
     if (!nrow(Neruon_enrich)) next
     
@@ -126,12 +140,15 @@ foreach(
       temp_Neruon_enrich <- Neruon_enrich[Neruon_enrich$subclass %in% cls, ]
       if (!nrow(temp_Neruon_enrich)) next
       
+      ## 当前 subclass 在窗口中的所有细胞
       temp_Neruon_enrich_cell_id <- cell_windows_layer_d[
         cell_windows_layer_d$loc_1 %in% temp_Neruon_enrich$loc_1, ]
       if (!nrow(temp_Neruon_enrich_cell_id)) next
       
+      ## 再保险：cell_label 全部字符
       temp_Neruon_enrich_cell_id$cell_label <- as.character(temp_Neruon_enrich_cell_id$cell_label)
       
+      ## =============== 步骤1：把每个窗口的 cell_label 列表收集起来 ===============
       temp_Neruon_enrich_cell_list <- list()
       a <- 1L
       for (i in unique(temp_Neruon_enrich_cell_id$loc_1)) {
@@ -142,9 +159,10 @@ foreach(
         a <- a + 1L
       }
       
+      ## =============== 步骤2：按重叠合并窗口，形成 merged_regions ===============
       merged_regions <- list()
       for (i in seq_along(temp_Neruon_enrich_cell_list)) {
-        region <- as.character(temp_Neruon_enrich_cell_list[[i]])
+        region <- as.character(temp_Neruon_enrich_cell_list[[i]])  # 字符
         overlap <- sapply(merged_regions, function(x) any(intersect(x, region) != 0))
         overlap.loc <- which(overlap == TRUE)
         if (any(overlap)) {
@@ -162,6 +180,7 @@ foreach(
         }
       }
       
+      ## =============== 步骤3：逐个 merged_region 写 merged_rgions_loc（loc 文件） ===============
       temp_Neruon_merged_regions_table <- list()
       a <- 1L
       for (i in seq_along(merged_regions)) {
@@ -181,6 +200,7 @@ foreach(
         temp_Neruon_merged_regions_table, use.names = TRUE, fill = TRUE
       )
       
+      ## 文件名中的 subclass/layer 做 safe_name 替换
       out_loc_file <- file.path(
         out_root,
         paste0(chip_id, "_", safe_name(cls), "_",
@@ -192,8 +212,10 @@ foreach(
       data.table::fwrite(temp_Neruon_merged_regions_table[, ..loc_cols],
                          out_loc_file, sep = "\t", quote = FALSE)
       
+      ## =============== 步骤4：根据 merged_regions 生成 cell_id 聚合表（所有 id 都是字符串） ===============
       temp_Neruon_merged_regions_table_cell_id <- list()
       a <- 1L
+      ## 源 file_tmp 中的 cell_label 也确保字符
       if ("cell_label" %in% names(file_tmp)) {
         file_tmp$cell_label <- as.character(file_tmp$cell_label)
       }
@@ -251,6 +273,7 @@ foreach(
       data.table::fwrite(temp_Neruon_merged_regions_table_cell_id,
                          out_id_file, sep = "\t", quote = FALSE)
       
+      ## 只清除本层循环临时对象，避免误删主数据
       rm(list = ls()[grep(
         "^tmp$|^tmpx$|^ids$|^wins$|^temp_Neruon_merged_regions_table$|^temp_Neruon_enrich_cell_list$",
         ls(), perl = TRUE
@@ -263,6 +286,7 @@ foreach(
   chip_id
 }
 
+## ========= 收尾 =========
 stopCluster(cl)
 
 message(sprintf(
