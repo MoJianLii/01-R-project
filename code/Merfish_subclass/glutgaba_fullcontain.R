@@ -138,7 +138,11 @@ suppressPackageStartupMessages({
 ## ===================== 2) 读入数据 =====================
 tab2 <- fread(tab2_path, sep="\t", header=TRUE, data.table=TRUE, check.names=FALSE)
 mp   <- fread(map_path,  sep="\t", header=TRUE, data.table=TRUE, check.names=FALSE)
-setnames(mp, c("subclass","cell_Neruon_type","subclass_sim"))
+if (!all(c("subclass","cell_Neruon_type") %in% names(mp))) {
+  stopifnot(ncol(mp) >= 2)
+  setnames(mp, old=names(mp)[1:2], new=c("subclass","cell_Neruon_type"))
+  if (ncol(mp) >= 3) setnames(mp, old=names(mp)[3], new="subclass_sim")
+}
 
 ## ===================== 3) 通用工具 =====================
 guess_col <- function(nm, patterns){
@@ -1382,19 +1386,13 @@ stopifnot(file.exists(clu_path))
 
 outdir <- file.path(combo_root, "Mouse1_strict1to1_PLOTS_ROI_MATCHED")
 dir.create(outdir, showWarnings=FALSE, recursive=TRUE)
-dir.create(file.path(outdir, "pairA"), showWarnings=FALSE, recursive=TRUE)
-dir.create(file.path(outdir, "pairB"), showWarnings=FALSE, recursive=TRUE)
+dir.create(file.path(outdir, "mouse1_all_strict1to1"), showWarnings=FALSE, recursive=TRUE)
 dir.create(file.path(outdir, "tables"), showWarnings=FALSE, recursive=TRUE)
-
-## 你关心的两类pair（包含匹配）
-pairA_glut_pat <- "L4/5 IT CTX Glut"
-pairA_gaba_pat <- "Pvalb Gaba"
-pairB_glut_pat <- "L2/3 IT CTX Glut"
-pairB_gaba_pat <- "Lamp5 Gaba"
 
 ## 绘图抽样（可调）
 bg_max_n <- 250000L
 hi_max_n <- 400000L
+max_pairs_to_plot <- Inf
 
 sample_dt <- function(dt, max_n=200000L, seed=1){
   if (nrow(dt) <= max_n) return(dt)
@@ -1402,11 +1400,11 @@ sample_dt <- function(dt, max_n=200000L, seed=1){
   dt[sample.int(.N, max_n)]
 }
 
-## ===================== 1)读pairs_1to1，强制只保留ov=1.0 =====================
+## ===================== 1)读pairs_1to1，强制只保留Mouse1且ov=1.0 =====================
 pairs <- fread(pairs_path, sep="\t", header=TRUE, data.table=TRUE, check.names=FALSE)
 
 for (cc in intersect(c("label1","label2","slide","slide1","slide2","subclass1","subclass2",
-                       "merge_regions1","merge_regions2"), names(pairs))){
+                       "ov"), names(pairs))){
   pairs[, (cc) := str_trim(as.character(get(cc)))]
 }
 
@@ -1419,36 +1417,6 @@ pairs[, slide_use := fifelse(!is.na(slide) & slide!="", slide,
 pairs <- pairs[!is.na(slide_use) & grepl("^C57BL6J-1\\.", slide_use)]
 stopifnot(nrow(pairs) > 0)
 
-## mr1_int/mr2_int解析（不依赖原文件是否有）
-mr_int_from_any_vec <- function(mr_str, lbl){
-  mr_str <- str_trim(as.character(mr_str))
-  lbl    <- str_trim(as.character(lbl))
-  out <- rep(NA_integer_, length(mr_str))
-  
-  m1 <- str_match(mr_str, "([0-9]+)\\s*$")[,2]
-  v1 <- suppressWarnings(as.integer(m1))
-  out[!is.na(v1)] <- v1[!is.na(v1)]
-  
-  idx <- is.na(out)
-  if (any(idx)) {
-    m2 <- str_match(lbl[idx], "regions_([0-9]+)\\s*$")[,2]
-    v2 <- suppressWarnings(as.integer(m2))
-    out[idx][!is.na(v2)] <- v2[!is.na(v2)]
-  }
-  
-  idx <- is.na(out)
-  if (any(idx)) {
-    m3 <- str_match(lbl[idx], "_([0-9]+)\\s*$")[,2]
-    v3 <- suppressWarnings(as.integer(m3))
-    out[idx][!is.na(v3)] <- v3[!is.na(v3)]
-  }
-  out
-}
-pairs[, mr1_int := mr_int_from_any_vec(merge_regions1, label1)]
-pairs[, mr2_int := mr_int_from_any_vec(merge_regions2, label2)]
-stopifnot(all(is.finite(pairs$mr1_int)))
-stopifnot(all(is.finite(pairs$mr2_int)))
-
 ## ov归一化到0~1，并严格筛选1.0
 stopifnot("ov" %in% names(pairs))
 pairs[, ov01 := as.numeric(ov)]
@@ -1457,31 +1425,29 @@ if (is.finite(ov_max) && ov_max > 1.5) pairs[, ov01 := ov01/100]
 pairs <- pairs[is.finite(ov01) & ov01 >= 0.999999]
 stopifnot(nrow(pairs) > 0)
 stopifnot(all(pairs$ov01 >= 0.999999))
+stopifnot(all(c("label1","label2") %in% names(pairs)))
 
 pairs[, pair_id := .I]
 pairs[, pair_type := paste0(subclass1, "→", subclass2)]
+pairs <- unique(pairs, by=c("slide_use","label1","label2"))
+if (is.finite(max_pairs_to_plot)) pairs <- pairs[1:min(.N, as.integer(max_pairs_to_plot))]
 fwrite(pairs, file.path(outdir, "tables", "Mouse1_pairs_strict_ov1.tsv"), sep="\t", quote=FALSE)
-
-## 分pairA/pairB
-psA <- pairs[grepl(pairA_glut_pat, subclass1, fixed=TRUE) & grepl(pairA_gaba_pat, subclass2, fixed=TRUE)]
-psB <- pairs[grepl(pairB_glut_pat, subclass1, fixed=TRUE) & grepl(pairB_gaba_pat, subclass2, fixed=TRUE)]
-fwrite(psA, file.path(outdir, "tables", "Mouse1_pairA.tsv"), sep="\t", quote=FALSE)
-fwrite(psB, file.path(outdir, "tables", "Mouse1_pairB.tsv"), sep="\t", quote=FALSE)
-
 cat("Mouse1严格ov=1pairs:", nrow(pairs), "\n")
-cat("pairA:", nrow(psA), " | pairB:", nrow(psB), "\n")
 
-## ===================== 2)读clu：构建“region所有细胞ID”映射 =====================
+## ===================== 2)读clu：构建“label -> region所有细胞ID”映射 =====================
 clu <- fread(clu_path, sep="\t", header=TRUE, data.table=TRUE, check.names=FALSE)
 
-stopifnot(all(c("slide","merge_regions","subclass",
+stopifnot(all(c("slide","layer","subclass","merge_regions",
                 "Glut_Neruon_cell_ids","GABA_Neruon_cell_ids","Non_Neruon_cell_ids") %in% names(clu)))
 
 clu[, slide := str_trim(as.character(slide))]
+clu[, layer := str_trim(as.character(layer))]
 clu[, subclass := str_trim(as.character(subclass))]
 clu[, merge_regions := str_trim(as.character(merge_regions))]
-clu[, merge_regions_int := suppressWarnings(as.integer(str_match(merge_regions, "([0-9]+)\\s*$")[,2]))]
-stopifnot(all(is.finite(clu$merge_regions_int)))
+if (!"label" %in% names(clu)) {
+  clu[, label := paste(slide, layer, subclass, merge_regions, sep="_")]
+}
+clu[, label := str_trim(as.character(label))]
 
 ## 注意：cell_label很长，必须用character匹配，不能转integer
 extract_ids <- function(s){
@@ -1490,19 +1456,19 @@ extract_ids <- function(s){
   unique(str_extract_all(s, "\\d+")[[1]])
 }
 
-## 关键：用(slide,subclass,merge_regions_int)做key（mr在不同subclass里会重复）
+## 关键：直接用label做key，避免merge_regions解析差异导致匹配失败
 allcell_map <- clu[
-  !is.na(slide) & slide!="" & !is.na(subclass) & subclass!="" & is.finite(merge_regions_int),
+  !is.na(label) & label != "",
   .(all_ids = list(unique(c(
     unlist(lapply(Glut_Neruon_cell_ids, extract_ids)),
     unlist(lapply(GABA_Neruon_cell_ids, extract_ids)),
     unlist(lapply(Non_Neruon_cell_ids,  extract_ids))
   )))),
-  by=.(slide, subclass, merge_regions_int)
+  by=.(label)
 ]
-setkey(allcell_map, slide, subclass, merge_regions_int)
+setkey(allcell_map, label)
 
-fwrite(allcell_map[, .(slide,subclass,merge_regions_int,n_all=lengths(all_ids))],
+fwrite(allcell_map[, .(label,n_all=lengths(all_ids))],
        file.path(outdir, "tables", "allcell_map_size.tsv"), sep="\t", quote=FALSE)
 
 ## ===================== 3)读切片坐标 =====================
@@ -1545,24 +1511,27 @@ collapse_subclass <- function(dt_roi, max_levels=25L){
   dt_roi
 }
 
-## ===================== 5)画图：图1红蓝两region(同一ROI基准)；图2同一ROI按subclass =====================
+## ===================== 5)画图：图1双cluster色块(体现包含)；图2同ROI按subclass =====================
 plot_two_regions <- function(dt_slice, ids_glu, ids_gab, title_main){
   bg <- sample_dt(dt_slice[is.finite(x) & is.finite(y), .(x,y)], bg_max_n, seed=1)
   
   hi <- dt_slice[cell_label %in% c(ids_glu, ids_gab), .(x,y,cell_label)]
   if (nrow(hi)==0) return(NULL)
   
-  hi[, group := fifelse(cell_label %in% ids_gab, "GabaRegion",
-                        fifelse(cell_label %in% ids_glu, "GlutRegion", NA_character_))]
+  hi[, in_glu := cell_label %in% ids_glu]
+  hi[, in_gab := cell_label %in% ids_gab]
+  hi[, group := fifelse(in_glu & in_gab, "Overlap",
+                        fifelse(in_gab, "GabaOnly",
+                                fifelse(in_glu, "GlutOnly", NA_character_)))]
   hi <- hi[!is.na(group)]
-  hi[, group := factor(group, levels=c("GlutRegion","GabaRegion"))]
+  hi[, group := factor(group, levels=c("GlutOnly","Overlap","GabaOnly"))]
   hi <- hi[, .SD[sample.int(.N, min(.N, hi_max_n))], by=group]
   
   ggplot() +
     geom_point(data=bg, aes(x=x, y=y), color="grey80", alpha=0.25, size=0.55) +
     geom_point(data=hi, aes(x=x, y=y, color=group), alpha=0.95, size=0.80) +
     coord_equal() +
-    scale_color_manual(values=c("GlutRegion"="#2C7FB8", "GabaRegion"="#E31A1C"), name=NULL) +
+    scale_color_manual(values=c("GlutOnly"="#2C7FB8", "Overlap"="#7A5195", "GabaOnly"="#E31A1C"), name=NULL) +
     labs(title=title_main, x=NULL, y=NULL) +
     theme_void(base_size=14) +
     theme(
@@ -1617,12 +1586,15 @@ run_one_set <- function(dt_pairs, subdir, tag){
     for (i in seq_len(nrow(rows))){
       rr <- rows[i]
       
-      ## 用“region所有细胞ID”(三类并集)——这才是你希望的region
-      g_glu <- allcell_map[J(sid, as.character(rr$subclass1), as.integer(rr$mr1_int)), all_ids]
-      g_gab <- allcell_map[J(sid, as.character(rr$subclass2), as.integer(rr$mr2_int)), all_ids]
+      ## 用label直接拿“region所有细胞ID”(三类并集)
+      g_glu <- allcell_map[J(as.character(rr$label1)), all_ids]
+      g_gab <- allcell_map[J(as.character(rr$label2)), all_ids]
       
       if (length(g_glu)==0 || length(g_gab)==0) {
-        log_dt[[length(log_dt)+1]] <- data.table(pair_id=rr$pair_id, slide=sid, note="MissingAllIDs")
+        log_dt[[length(log_dt)+1]] <- data.table(
+          pair_id=rr$pair_id, slide=sid, note="MissingAllIDs",
+          label1=as.character(rr$label1), label2=as.character(rr$label2)
+        )
         next
       }
       
@@ -1630,7 +1602,7 @@ run_one_set <- function(dt_pairs, subdir, tag){
       ids_gab <- g_gab[[1]]
       roi_ids <- union(ids_glu, ids_gab)
       
-      ## 图1：红蓝两region（注意：图2会用同一个roi_ids）
+      ## 图1：双cluster色块（注意：图2会用同一个roi_ids）
       title1 <- paste0(sid," | ",tag," | pair_id=",rr$pair_id,
                        " | ov=",sprintf("%.3f", rr$ov01),
                        " | nGlu=",length(ids_glu)," nGab=",length(ids_gab))
@@ -1655,19 +1627,24 @@ run_one_set <- function(dt_pairs, subdir, tag){
       
       log_dt[[length(log_dt)+1]] <- data.table(
         pair_id=rr$pair_id, slide=sid, note="OK",
-        mr1=rr$mr1_int, mr2=rr$mr2_int,
+        label1=as.character(rr$label1), label2=as.character(rr$label2),
         n_glu=length(ids_glu), n_gab=length(ids_gab),
         ROIcells=length(roi_ids), ov=rr$ov01
       )
     }
   }
   
+  if (length(log_dt) == 0) {
+    return(data.table(
+      pair_id=integer(), slide=character(), note=character(),
+      label1=character(), label2=character(),
+      n_glu=integer(), n_gab=integer(), ROIcells=integer(), ov=numeric()
+    ))
+  }
   rbindlist(log_dt, use.names=TRUE, fill=TRUE)
 }
 
-logA <- run_one_set(psA, "pairA", "pairA(L4/5ITCTXGlut–PvalbGaba)")
-logB <- run_one_set(psB, "pairB", "pairB(L2/3ITCTXGlut–Lamp5Gaba)")
-log_all <- rbindlist(list(logA, logB), use.names=TRUE, fill=TRUE)
+log_all <- run_one_set(pairs, "mouse1_all_strict1to1", "Mouse1 strict1to1 Glut-contains-Gaba")
 
 fwrite(log_all, file.path(outdir, "tables", "draw_log.tsv"), sep="\t", quote=FALSE)
 cat("完成。输出目录：", outdir, "\n", sep="")
