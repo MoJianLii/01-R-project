@@ -1895,3 +1895,205 @@ if (nrow(pair_subclass_summary) > 0) {
 } else {
   cat("ROI subclass统计完成，但没有可用pair（请检查issues表）。\n")
 }
+
+## ===================== 9) Mouse1：排除皮层Layer1，保留其余5层并绘图 =====================
+stopifnot(exists("pairs"))
+
+keep_layers5 <- c("2/3", "4", "5", "6a", "6b")
+
+norm_layer_token <- function(x){
+  x <- tolower(str_trim(as.character(x)))
+  x <- gsub("^layer\\s*", "", x)
+  x <- gsub("\\s+", "", x)
+  x[x %in% c("23", "2-3", "2_3")] <- "2/3"
+  x
+}
+
+layer_from_label2 <- function(lbl){
+  s <- str_split(as.character(lbl), "_", simplify=TRUE)
+  if (ncol(s) < 2) return(rep(NA_character_, length(lbl)))
+  s[,2]
+}
+
+mouse1_l5 <- copy(pairs)
+
+## 优先用现成层信息；没有就从label2兜底解析
+if ("layer2" %in% names(mouse1_l5)) {
+  mouse1_l5[, layer_use := as.character(layer2)]
+} else if ("layer2_f" %in% names(mouse1_l5)) {
+  mouse1_l5[, layer_use := as.character(layer2_f)]
+} else if ("layer" %in% names(mouse1_l5)) {
+  mouse1_l5[, layer_use := as.character(layer)]
+} else {
+  mouse1_l5[, layer_use := layer_from_label2(label2)]
+}
+
+mouse1_l5[, layer_use := norm_layer_token(layer_use)]
+mouse1_l5[, layer_use := ifelse(layer_use %chin% keep_layers5, layer_use, NA_character_)]
+mouse1_l5 <- mouse1_l5[!is.na(layer_use)]
+mouse1_l5[, layer_f := factor(layer_use, levels=keep_layers5)]
+
+if (nrow(mouse1_l5) == 0) {
+  cat("Mouse1排除Layer1后无可用pairs，请检查layer字段来源。\n")
+} else {
+  ## 导出筛选结果（仅保留关键列）
+  keep_cols <- intersect(
+    c("pair_id","slide_use","label1","label2","subclass1","subclass2","ov01","layer_use","layer_f"),
+    names(mouse1_l5)
+  )
+  fwrite(
+    mouse1_l5[, ..keep_cols],
+    file.path(outdir, "tables", "Mouse1_strict_pairs_excludeLayer1.tsv"),
+    sep="\t", quote=FALSE
+  )
+  
+  ## 图1：5层pair数量柱图
+  dt_l5 <- mouse1_l5[, .N, by=layer_f][order(layer_f)]
+  fwrite(dt_l5, file.path(outdir, "tables", "Mouse1_pairs_count_layers5.tsv"), sep="\t", quote=FALSE)
+  
+  p_l5_bar <- ggplot(dt_l5, aes(x=layer_f, y=N, fill=layer_f)) +
+    geom_col(width=0.72, color="black", linewidth=0.25) +
+    geom_text(aes(label=N), vjust=-0.35, fontface="bold", size=3.8) +
+    scale_fill_manual(values=c("2/3"="#4EA8DE","4"="#6FB06F","5"="#3A4E8C","6a"="#F2A279","6b"="#9AA5B1"), guide="none") +
+    scale_y_continuous(expand=expansion(mult=c(0,0.12))) +
+    labs(
+      x="Layer (exclude L1)",
+      y="Mouse1 strict pairs",
+      title="Mouse1 strict pairs in layers 2/3,4,5,6a,6b"
+    ) +
+    theme_classic(base_size=12) +
+    theme(
+      plot.title = element_text(hjust=0.5, face="bold"),
+      axis.text  = element_text(face="bold"),
+      axis.title = element_text(face="bold"),
+      panel.border = element_rect(color="black", fill=NA, linewidth=0.7)
+    )
+  
+  ggsave(file.path(outdir, "Mouse1_excludeLayer1_pairs_bar.png"), p_l5_bar,
+         width=8.2, height=4.8, dpi=350, bg="white")
+  ggsave(file.path(outdir, "Mouse1_excludeLayer1_pairs_bar.pdf"), p_l5_bar,
+         width=8.2, height=4.8, device=cairo_pdf)
+  
+  ## 图2：Top pair_type × 5层 热图
+  mouse1_l5[, pair_type := paste0(
+    fifelse(!is.na(subclass1) & subclass1 != "", subclass1, "NA"),
+    "→",
+    fifelse(!is.na(subclass2) & subclass2 != "", subclass2, "NA")
+  )]
+  
+  topK_l5 <- 30L
+  top_pairs_l5 <- mouse1_l5[, .N, by=pair_type][order(-N)][1:min(topK_l5, .N), pair_type]
+  
+  dt_hm_l5 <- mouse1_l5[, .N, by=.(pair_type, layer_f)]
+  dt_hm_l5[, pair_show := fifelse(pair_type %chin% top_pairs_l5, pair_type, "Other")]
+  dt_hm_l5 <- dt_hm_l5[, .(N=sum(N)), by=.(pair_show, layer_f)]
+  pair_levels_l5 <- c(top_pairs_l5, "Other")
+  dt_hm_l5[, pair_f := factor(pair_show, levels=rev(pair_levels_l5))]
+  dt_hm_l5[, label := ifelse(N >= 2L, as.character(N), "")]
+  
+  p_hm_l5 <- ggplot(dt_hm_l5, aes(x=layer_f, y=pair_f, fill=N)) +
+    geom_tile(color="black", linewidth=0.18) +
+    geom_text(aes(label=label), size=2.7, fontface="bold") +
+    scale_fill_gradientn(
+      colours=c("white","#ffffcc","#ffeda0","#feb24c","#fd8d3c","#f03b20","#bd0026"),
+      trans="sqrt", labels=comma, name="Count"
+    ) +
+    labs(
+      x="Layer (exclude L1)",
+      y="PairType (subclass1→subclass2)",
+      title=paste0("Mouse1 Top ", min(topK_l5, length(top_pairs_l5)), " pair types across 5 layers (L1 excluded)")
+    ) +
+    theme_classic(base_size=11) +
+    theme(
+      plot.title = element_text(hjust=0.5, face="bold"),
+      axis.text.x = element_text(face="bold"),
+      axis.text.y = element_text(size=7),
+      axis.title = element_text(face="bold"),
+      panel.border = element_rect(color="black", fill=NA, linewidth=0.7)
+    )
+  
+  h_l5 <- max(6, 0.20 * length(pair_levels_l5) + 2.5)
+  ggsave(file.path(outdir, "Mouse1_excludeLayer1_pairtype_heatmap.png"), p_hm_l5,
+         width=8.8, height=h_l5, dpi=350, bg="white")
+  ggsave(file.path(outdir, "Mouse1_excludeLayer1_pairtype_heatmap.pdf"), p_hm_l5,
+         width=8.8, height=h_l5, device=cairo_pdf)
+  
+  cat("Mouse1排除Layer1筛选与绘图完成。保留层：", paste(keep_layers5, collapse=","), "\n", sep="")
+}
+
+## ===================== 10) Mouse1排除Layer1：逐对出图（每对4文件）+ 统计格式 =====================
+if (exists("mouse1_l5") && nrow(mouse1_l5) > 0) {
+  subdir_l5_each <- "mouse1_excludeLayer1_all_strict1to1"
+  dir.create(file.path(outdir, subdir_l5_each), showWarnings=FALSE, recursive=TRUE)
+  
+  ## 逐pair绘图：A_twoRegions + B_ROI_subclass（各png/pdf，共4文件）
+  draw_l5 <- run_one_set(
+    dt_pairs = mouse1_l5,
+    subdir   = subdir_l5_each,
+    tag      = "Mouse1 strict1to1 excludeLayer1"
+  )
+  fwrite(
+    draw_l5,
+    file.path(outdir, "tables", "Mouse1_excludeLayer1_eachpair_draw_log.tsv"),
+    sep="\t", quote=FALSE
+  )
+  
+  ## 每对文件完整性统计（检查4文件是否齐全）
+  pair_meta_l5 <- unique(mouse1_l5[, .(
+    pair_id, slide = slide_use, layer_use, label1, label2, subclass1, subclass2, ov01
+  )])
+  
+  pair_meta_l5[, prefix := paste0(slide, "_pair", pair_id)]
+  pair_meta_l5[, file_A_png := file.path(outdir, subdir_l5_each, paste0(prefix, "_A_twoRegions.png"))]
+  pair_meta_l5[, file_A_pdf := file.path(outdir, subdir_l5_each, paste0(prefix, "_A_twoRegions.pdf"))]
+  pair_meta_l5[, file_B_png := file.path(outdir, subdir_l5_each, paste0(prefix, "_B_ROI_subclass.png"))]
+  pair_meta_l5[, file_B_pdf := file.path(outdir, subdir_l5_each, paste0(prefix, "_B_ROI_subclass.pdf"))]
+  
+  pair_meta_l5[, n_files_found := as.integer(file.exists(file_A_png)) +
+                                as.integer(file.exists(file_A_pdf)) +
+                                as.integer(file.exists(file_B_png)) +
+                                as.integer(file.exists(file_B_pdf))]
+  pair_meta_l5[, expected_files := 4L]
+  pair_meta_l5[, files_complete := (n_files_found == expected_files)]
+  
+  pair_stat_l5 <- merge(
+    pair_meta_l5,
+    draw_l5[, .(pair_id, slide, note, n_glu, n_gab, ROIcells, ov)],
+    by=c("pair_id","slide"),
+    all.x=TRUE
+  )
+  pair_stat_l5[is.na(note), note := "NoDrawLog"]
+  
+  fwrite(
+    pair_stat_l5[order(factor(layer_use, levels=keep_layers5), pair_id)],
+    file.path(outdir, "tables", "Mouse1_excludeLayer1_eachpair_filecheck.tsv"),
+    sep="\t", quote=FALSE
+  )
+  
+  summary_l5 <- pair_stat_l5[, .(
+    n_pairs = .N,
+    n_draw_ok = sum(note == "OK", na.rm=TRUE),
+    n_file_complete = sum(files_complete, na.rm=TRUE),
+    pct_file_complete = round(100 * sum(files_complete, na.rm=TRUE) / .N, 2)
+  ), by=.(layer_use)][order(factor(layer_use, levels=keep_layers5))]
+  summary_l5_total <- pair_stat_l5[, .(
+    layer_use = "TOTAL",
+    n_pairs = .N,
+    n_draw_ok = sum(note == "OK", na.rm=TRUE),
+    n_file_complete = sum(files_complete, na.rm=TRUE),
+    pct_file_complete = round(100 * sum(files_complete, na.rm=TRUE) / .N, 2)
+  )]
+  summary_l5 <- rbindlist(list(summary_l5, summary_l5_total), use.names=TRUE, fill=TRUE)
+  
+  fwrite(
+    summary_l5,
+    file.path(outdir, "tables", "Mouse1_excludeLayer1_eachpair_summary.tsv"),
+    sep="\t", quote=FALSE
+  )
+  
+  cat("逐对4文件绘图完成：目录=", file.path(outdir, subdir_l5_each),
+      "；pairs=", nrow(pair_stat_l5),
+      "；4文件齐全=", sum(pair_stat_l5$files_complete, na.rm=TRUE), "\n", sep="")
+} else {
+  cat("跳过逐对4文件绘图：Mouse1排除Layer1后没有可用pairs。\n")
+}
