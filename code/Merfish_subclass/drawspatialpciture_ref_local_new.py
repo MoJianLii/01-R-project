@@ -301,7 +301,7 @@ def draw_panel3_overlay(ax, whole_df, ids_glu, ids_gab, title):
         np.where(hi["cell_label"].isin(set_gab), "GabaOnly", "GlutOnly"),
     )
     # deepen highlight colors to make ROI stand out
-    colors = {"GlutOnly": "#0B4FAE", "Overlap": "#5A2D82", "GabaOnly": "#B3131B"}
+    colors = {"GlutOnly": "#003366", "Overlap": "#8B0000", "GabaOnly": "#B3131B"}
     for g in ["GlutOnly", "Overlap", "GabaOnly"]:
         part = hi[hi["grp"] == g]
         if len(part) > 0:
