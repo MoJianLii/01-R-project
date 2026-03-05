@@ -40,6 +40,8 @@ OUT_COMBINED = os.path.join(OUT_DIR, "combined")
 OUT_P1 = os.path.join(OUT_DIR, "panel1_subclass")
 OUT_P2 = os.path.join(OUT_DIR, "panel2_substructure")
 OUT_P3 = os.path.join(OUT_DIR, "panel3_overlay")
+OUT_P3_ANN = os.path.join(OUT_DIR, "panel3_overlay_with_cluster_stats")
+OUT_COMBINED_ANN = os.path.join(OUT_DIR, "combined_with_cluster_stats")
 
 
 # ===================== Params =====================
@@ -159,6 +161,78 @@ def build_label_to_ids(cluster_file, labels):
         for c in ID_COLS:
             ids.extend(parse_ids(row.get(c)))
         out[row["label"]] = list(dict.fromkeys(ids))
+    return out
+
+
+def _pick_first_col(columns, candidates):
+    for c in candidates:
+        if c in columns:
+            return c
+    return None
+
+
+def _safe_int(v):
+    try:
+        return int(float(v))
+    except Exception:
+        return None
+
+
+def build_label_to_cluster_stats(cluster_file, labels):
+    """
+    Build label -> {glu_num, gaba_num, ei_ratio}
+    """
+    head = pd.read_csv(cluster_file, sep="\t", nrows=0)
+    cols = head.columns.tolist()
+
+    needed = set(["slide", "layer", "subclass", "merge_regions"] + ID_COLS)
+    miss = [c for c in needed if c not in cols]
+    if miss:
+        raise ValueError("cluster_total missing columns for stats: {}".format(miss))
+
+    glu_num_col = _pick_first_col(cols, [
+        "Glut_Neruon_cell_ids_num", "Glut_Neuron_cell_ids_num", "GLU_cell_num", "cluster_GLU_cell_num"
+    ])
+    gaba_num_col = _pick_first_col(cols, [
+        "GABA_Neruon_cell_ids_num", "GABA_Neuron_cell_ids_num", "GABA_cell_num", "cluster_GABA_cell_num"
+    ])
+
+    usecols = list(needed) + (["label"] if "label" in cols else [])
+    if glu_num_col:
+        usecols.append(glu_num_col)
+    if gaba_num_col:
+        usecols.append(gaba_num_col)
+    usecols = list(dict.fromkeys(usecols))
+
+    clu = pd.read_csv(cluster_file, sep="\t", dtype=str, usecols=usecols, low_memory=False)
+    if "label" not in clu.columns:
+        clu["label"] = (
+            clu["slide"].astype(str).str.strip()
+            + "_"
+            + clu["layer"].astype(str).str.strip()
+            + "_"
+            + clu["subclass"].astype(str).str.strip()
+            + "_"
+            + clu["merge_regions"].astype(str).str.strip()
+        )
+    clu["label"] = clu["label"].astype(str).str.strip()
+    label_set = set([str(x).strip() for x in labels if str(x).strip()])
+    clu = clu[clu["label"].isin(label_set)].copy()
+
+    out = {}
+    for _, row in clu.iterrows():
+        glu_n = _safe_int(row.get(glu_num_col)) if glu_num_col else None
+        gaba_n = _safe_int(row.get(gaba_num_col)) if gaba_num_col else None
+        if glu_n is None:
+            glu_n = len(parse_ids(row.get("Glut_Neruon_cell_ids")))
+        if gaba_n is None:
+            gaba_n = len(parse_ids(row.get("GABA_Neruon_cell_ids")))
+        ei = (float(glu_n) / float(gaba_n)) if (gaba_n is not None and gaba_n > 0) else np.nan
+        out[row["label"]] = {
+            "glu_num": int(glu_n) if glu_n is not None else 0,
+            "gaba_num": int(gaba_n) if gaba_n is not None else 0,
+            "ei_ratio": ei,
+        }
     return out
 
 
@@ -284,10 +358,10 @@ def draw_panel2_substructure(ax, section_df, title):
     ax.set_title(title, fontsize=12)
 
 
-def draw_panel3_overlay(ax, whole_df, ids_glu, ids_gab, title):
+def draw_panel3_overlay(ax, whole_df, ids_glu, ids_gab, title, anno_text=None):
     bg = sample_df(whole_df[["x", "y"]].copy(), MAX_BG_POINTS, seed=1)
     # slightly darker background for better contrast
-    ax.scatter(bg["x"], bg["y"], s=0.6, color="#7A7A7A", marker=".", alpha=1.0, linewidths=0)
+    ax.scatter(bg["x"], bg["y"], s=8, color="#7A7A7A", marker=".", alpha=1.0, linewidths=0)
 
     id_union = set(ids_glu).union(set(ids_gab))
     hi = whole_df[whole_df["cell_label"].isin(id_union)][["cell_label", "x", "y"]].copy()
@@ -301,13 +375,13 @@ def draw_panel3_overlay(ax, whole_df, ids_glu, ids_gab, title):
         np.where(hi["cell_label"].isin(set_gab), "GabaOnly", "GlutOnly"),
     )
     # deepen highlight colors to make ROI stand out
-    colors = {"GlutOnly": "#003366", "Overlap": "#8B0000", "GabaOnly": "#B3131B"}
+    colors = {"GlutOnly": "#FF0000", "Overlap": "#0033FF", "GabaOnly": "#B3131B"}
     for g in ["GlutOnly", "Overlap", "GabaOnly"]:
         part = hi[hi["grp"] == g]
         if len(part) > 0:
             ax.scatter(
                 part["x"], part["y"],
-                s=2.0, color=colors[g], marker=".",
+                s=10.0, color=colors[g], marker="o",
                 alpha=1.0, linewidths=0, zorder=3
             )
 
@@ -317,6 +391,13 @@ def draw_panel3_overlay(ax, whole_df, ids_glu, ids_gab, title):
     ax.set_xticks([])
     ax.set_yticks([])
     ax.set_title(title, fontsize=12)
+    if anno_text:
+        ax.text(
+            0.02, 0.98, anno_text,
+            transform=ax.transAxes, ha="left", va="top",
+            fontsize=9, color="black",
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", edgecolor="#666666", alpha=0.82)
+        )
 
     return {
         "n_glu_only_drawn": int((hi["grp"] == "GlutOnly").sum()),
@@ -326,7 +407,7 @@ def draw_panel3_overlay(ax, whole_df, ids_glu, ids_gab, title):
 
 
 def main():
-    ensure_dirs([OUT_DIR, OUT_COMBINED, OUT_P1, OUT_P2, OUT_P3, TABLES_DIR])
+    ensure_dirs([OUT_DIR, OUT_COMBINED, OUT_P1, OUT_P2, OUT_P3, OUT_P3_ANN, OUT_COMBINED_ANN, TABLES_DIR])
 
     pairs = load_pairs()
     if pairs.empty:
@@ -334,6 +415,7 @@ def main():
 
     cluster_file = pick_cluster_file()
     label_to_ids = build_label_to_ids(cluster_file, set(pairs["label1"]).union(set(pairs["label2"])))
+    label_to_stats = build_label_to_cluster_stats(cluster_file, set(pairs["label1"]).union(set(pairs["label2"])))
     local_cell = load_local_cell_metadata(BASE_DIR)
 
     logs = []
@@ -391,6 +473,15 @@ def main():
             })
             continue
 
+        s1 = label_to_stats.get(label1, {"glu_num": 0, "gaba_num": 0, "ei_ratio": np.nan})
+        s2 = label_to_stats.get(label2, {"glu_num": 0, "gaba_num": 0, "ei_ratio": np.nan})
+        c1_ei = "NA" if np.isnan(s1["ei_ratio"]) else "{:.2f}".format(s1["ei_ratio"])
+        c2_ei = "NA" if np.isnan(s2["ei_ratio"]) else "{:.2f}".format(s2["ei_ratio"])
+        anno_text = (
+            "cluster1  GLU:{}, GABA:{}, EI:{}\n"
+            "cluster2  GLU:{}, GABA:{}, EI:{}"
+        ).format(s1["glu_num"], s1["gaba_num"], c1_ei, s2["glu_num"], s2["gaba_num"], c2_ei)
+
         stem = "{}_pair{:04d}_layer{}".format(safe_token(slide), pair_id, safe_token(layer))
         try:
             fig, ax = plt.subplots(1, 3, figsize=(18.8, 6.6))
@@ -406,11 +497,12 @@ def main():
                 ax[2], whole_df, ids_glu, ids_gab,
                 "{} layer {} cluster1:{} cluster2:{}".format(
                     slide, layer, len(ids_glu), len(ids_gab)
-                )
+                ),
+                anno_text=anno_text
             )
             fig.tight_layout()
-            fig.savefig(os.path.join(OUT_COMBINED, "{}_3panel_refstyle.png".format(stem)), dpi=350, facecolor="white")
-            fig.savefig(os.path.join(OUT_COMBINED, "{}_3panel_refstyle.pdf".format(stem)), dpi=350, facecolor="white")
+            fig.savefig(os.path.join(OUT_COMBINED_ANN, "{}_3panel_refstyle_withStats.png".format(stem)), dpi=350, facecolor="white")
+            fig.savefig(os.path.join(OUT_COMBINED_ANN, "{}_3panel_refstyle_withStats.pdf".format(stem)), dpi=350, facecolor="white")
             plt.close(fig)
 
             # also save three individual panels
@@ -427,9 +519,13 @@ def main():
             plt.close(p2)
 
             p3, a3 = plt.subplots(1, 1, figsize=(6.2, 6.2))
-            draw_panel3_overlay(a3, whole_df, ids_glu, ids_gab, "{} Pair {}".format(slide, pair_id))
+            draw_panel3_overlay(
+                a3, whole_df, ids_glu, ids_gab,
+                "{} Pair {}".format(slide, pair_id),
+                anno_text=anno_text
+            )
             p3.tight_layout()
-            p3.savefig(os.path.join(OUT_P3, "{}_P3_overlay.png".format(stem)), dpi=350, facecolor="white")
+            p3.savefig(os.path.join(OUT_P3_ANN, "{}_P3_overlay_withStats.png".format(stem)), dpi=350, facecolor="white")
             plt.close(p3)
 
             logs.append({
@@ -444,6 +540,12 @@ def main():
                 "n_total_cells_slide": int(len(whole_df)),
                 "n_glu_ids": int(len(ids_glu)),
                 "n_gab_ids": int(len(ids_gab)),
+                "cluster1_glu_num": int(s1["glu_num"]),
+                "cluster1_gaba_num": int(s1["gaba_num"]),
+                "cluster1_ei_ratio": c1_ei,
+                "cluster2_glu_num": int(s2["glu_num"]),
+                "cluster2_gaba_num": int(s2["gaba_num"]),
+                "cluster2_ei_ratio": c2_ei,
                 "n_glu_only_drawn": ov_stat["n_glu_only_drawn"],
                 "n_overlap_drawn": ov_stat["n_overlap_drawn"],
                 "n_gab_only_drawn": ov_stat["n_gab_only_drawn"],
