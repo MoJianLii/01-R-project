@@ -495,7 +495,7 @@ def main():
             )
             ov_stat = draw_panel3_overlay(
                 ax[2], whole_df, ids_glu, ids_gab,
-                "{} layer {} cluster1:{} cluster2:{}".format(
+                "{} layer {} cluster1_Glut:{} cluster2_Gaba:{}".format(
                     slide, layer, len(ids_glu), len(ids_gab)
                 ),
                 anno_text=anno_text
