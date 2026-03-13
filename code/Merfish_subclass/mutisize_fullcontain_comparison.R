@@ -381,3 +381,142 @@ if (nrow(common_slices) > 0) {
 cat("Visualization done.\n")
 cat("Plot directory: ", plot_dir, "\n", sep = "")
 cat("Common-slice detail directory: ", common_slice_dir, "\n", sep = "")
+
+## ===================== Collect all6 slice images from combined_with_cluster_stats =====================
+all6_img_outdir <- file.path(outdir, "all6_common_slice_combined_with_cluster_stats")
+dir.create(all6_img_outdir, showWarnings = FALSE, recursive = TRUE)
+
+rel_combined_stats_dir <- file.path(
+  "Mouse1_strict1to1_PLOTS_ROI_MATCHED",
+  "mouse1_excludeLayer1_refstyle_from_local",
+  "combined_with_cluster_stats"
+)
+
+scan_log_list <- list()
+copy_log_list <- list()
+
+if (nrow(common_slices) > 0) {
+  for (cc in combo_ids) {
+    src_dir <- file.path(base_dir, cc, rel_combined_stats_dir)
+    dst_combo_dir <- file.path(all6_img_outdir, cc)
+    dir.create(dst_combo_dir, showWarnings = FALSE, recursive = TRUE)
+    
+    if (!dir.exists(src_dir)) {
+      scan_log_list[[length(scan_log_list) + 1L]] <- data.table(
+        combo = cc,
+        slide_use = NA_character_,
+        source_dir = src_dir,
+        n_files_matched = NA_integer_,
+        status = "SourceDirMissing"
+      )
+      next
+    }
+    
+    all_img_files <- list.files(src_dir, full.names = TRUE, recursive = FALSE)
+    all_img_files <- all_img_files[grepl("\\.(png|pdf)$", all_img_files, ignore.case = TRUE)]
+    if (length(all_img_files) == 0) {
+      scan_log_list[[length(scan_log_list) + 1L]] <- data.table(
+        combo = cc,
+        slide_use = NA_character_,
+        source_dir = src_dir,
+        n_files_matched = 0L,
+        status = "NoImageFiles"
+      )
+      next
+    }
+    
+    for (sid in common_slices$slide_use) {
+      sid <- as.character(sid)
+      sid_tok <- safe_token(sid)
+      bn <- basename(all_img_files)
+      
+      hit <- all_img_files[
+        startsWith(bn, paste0(sid, "_")) |
+          startsWith(bn, paste0(sid_tok, "_"))
+      ]
+      
+      scan_log_list[[length(scan_log_list) + 1L]] <- data.table(
+        combo = cc,
+        slide_use = sid,
+        source_dir = src_dir,
+        n_files_matched = as.integer(length(hit)),
+        status = ifelse(length(hit) > 0, "OK", "NoMatchedImage")
+      )
+      
+      if (length(hit) > 0) {
+        dst_slice_dir <- file.path(dst_combo_dir, safe_token(sid))
+        dir.create(dst_slice_dir, showWarnings = FALSE, recursive = TRUE)
+        
+        dst <- file.path(dst_slice_dir, basename(hit))
+        ok <- file.copy(hit, dst, overwrite = TRUE, copy.date = TRUE)
+        
+        copy_log_list[[length(copy_log_list) + 1L]] <- data.table(
+          combo = cc,
+          slide_use = sid,
+          source_file = hit,
+          dest_file = dst,
+          copied = as.logical(ok)
+        )
+      }
+    }
+  }
+}
+
+scan_log <- if (length(scan_log_list) > 0) {
+  rbindlist(scan_log_list, use.names = TRUE, fill = TRUE)
+} else {
+  data.table(
+    combo = character(),
+    slide_use = character(),
+    source_dir = character(),
+    n_files_matched = integer(),
+    status = character()
+  )
+}
+
+copy_log <- if (length(copy_log_list) > 0) {
+  rbindlist(copy_log_list, use.names = TRUE, fill = TRUE)
+} else {
+  data.table(
+    combo = character(),
+    slide_use = character(),
+    source_file = character(),
+    dest_file = character(),
+    copied = logical()
+  )
+}
+
+fwrite(
+  scan_log,
+  file.path(outdir, "tables", "all6_common_slices_combined_with_cluster_stats_scan.tsv"),
+  sep = "\t", quote = FALSE
+)
+fwrite(
+  copy_log,
+  file.path(outdir, "tables", "all6_common_slices_combined_with_cluster_stats_copy_log.tsv"),
+  sep = "\t", quote = FALSE
+)
+
+img_summary <- scan_log[!is.na(slide_use), .(
+  n_common_slices = uniqueN(slide_use),
+  n_slices_with_image = sum(n_files_matched > 0, na.rm = TRUE),
+  n_matched_files = sum(n_files_matched, na.rm = TRUE)
+), by = combo]
+
+if (nrow(copy_log) > 0) {
+  copied_summary <- copy_log[, .(
+    n_copied_files = sum(copied, na.rm = TRUE),
+    n_copy_failed = sum(!copied, na.rm = TRUE)
+  ), by = combo]
+  img_summary <- merge(img_summary, copied_summary, by = "combo", all = TRUE)
+}
+
+img_summary <- img_summary[match(combo_ids, combo)]
+fwrite(
+  img_summary,
+  file.path(outdir, "tables", "all6_common_slices_combined_with_cluster_stats_summary.tsv"),
+  sep = "\t", quote = FALSE
+)
+
+cat("All6 combined_with_cluster_stats image collection done.\n")
+cat("Image output directory: ", all6_img_outdir, "\n", sep = "")
