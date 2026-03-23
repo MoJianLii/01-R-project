@@ -520,3 +520,78 @@ fwrite(
 
 cat("All6 combined_with_cluster_stats image collection done.\n")
 cat("Image output directory: ", all6_img_outdir, "\n", sep = "")
+
+## ===================== Keep slices present in >=2 parameter settings =====================
+stopifnot(exists("slice_presence_wide"), exists("all_pairs"), exists("combo_ids"))
+
+atleast2_outdir <- file.path(outdir, "atleast2_params_slice_results")
+dir.create(atleast2_outdir, showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(atleast2_outdir, "tables"), showWarnings = FALSE, recursive = TRUE)
+
+atleast2_slices <- copy(slice_presence_wide[n_combos_present >= 2L])
+only1_slices <- copy(slice_presence_wide[n_combos_present == 1L])
+
+setorder(atleast2_slices, -n_combos_present, slide_use)
+setorder(only1_slices, slide_use)
+
+fwrite(
+  atleast2_slices,
+  file.path(atleast2_outdir, "tables", "slices_present_in_atleast2_of6.tsv"),
+  sep = "\t", quote = FALSE
+)
+fwrite(
+  only1_slices,
+  file.path(atleast2_outdir, "tables", "slices_present_in_only1_of6.tsv"),
+  sep = "\t", quote = FALSE
+)
+
+atleast2_pairs <- all_pairs[slide_use %chin% atleast2_slices$slide_use]
+setorder(atleast2_pairs, slide_use, combo)
+fwrite(
+  atleast2_pairs,
+  file.path(atleast2_outdir, "tables", "fullcontain_pairs_on_slices_atleast2_of6.tsv"),
+  sep = "\t", quote = FALSE
+)
+
+atleast2_summary_by_combo <- atleast2_pairs[, .(
+  n_pairs = .N,
+  n_unique_slices = uniqueN(slide_use),
+  n_unique_label1 = if ("label1" %in% names(atleast2_pairs)) uniqueN(label1) else NA_integer_,
+  n_unique_label2 = if ("label2" %in% names(atleast2_pairs)) uniqueN(label2) else NA_integer_
+), by = combo]
+atleast2_summary_by_combo <- atleast2_summary_by_combo[match(combo_ids, combo)]
+
+fwrite(
+  atleast2_summary_by_combo,
+  file.path(atleast2_outdir, "tables", "summary_atleast2_by_combo.tsv"),
+  sep = "\t", quote = FALSE
+)
+
+atleast2_meta <- data.table(
+  filter_rule = "n_combos_present >= 2",
+  total_combos = length(combo_ids),
+  total_slices_before = nrow(slice_presence_wide),
+  slices_kept = nrow(atleast2_slices),
+  slices_removed_only1 = nrow(only1_slices),
+  pair_rows_kept = nrow(atleast2_pairs)
+)
+fwrite(
+  atleast2_meta,
+  file.path(atleast2_outdir, "tables", "atleast2_filter_metadata.tsv"),
+  sep = "\t", quote = FALSE
+)
+
+atleast2_summary_txt <- file.path(atleast2_outdir, "summary_atleast2_of6.txt")
+sink(atleast2_summary_txt)
+cat("Filter rule: keep slices with n_combos_present >= 2 (remove slices appearing in only one parameter setting).\n\n")
+cat("Total slices in matrix: ", nrow(slice_presence_wide), "\n", sep = "")
+cat("Slices kept (>=2): ", nrow(atleast2_slices), "\n", sep = "")
+cat("Slices removed (=1): ", nrow(only1_slices), "\n\n", sep = "")
+cat("Pair rows kept after filter: ", nrow(atleast2_pairs), "\n\n", sep = "")
+cat("Summary by combo:\n")
+print(atleast2_summary_by_combo)
+sink()
+
+cat("AtLeast2 filter done.\n")
+cat("AtLeast2 output directory: ", atleast2_outdir, "\n", sep = "")
+## ===================== End of AtLeast2 filter module =====================
