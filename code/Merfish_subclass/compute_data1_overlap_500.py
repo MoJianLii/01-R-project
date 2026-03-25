@@ -5,18 +5,16 @@ This script ports the core logic in extract_figure1.R to Python and runs each
 sample in parallel (default: 20 workers).
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import itertools
 import math
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
-def safe_int(value: str | None) -> int | None:
+def safe_int(value: Optional[str]) -> Optional[int]:
     if value is None or value == "":
         return None
     try:
@@ -25,7 +23,7 @@ def safe_int(value: str | None) -> int | None:
         return None
 
 
-def safe_float(value: str | None) -> float | None:
+def safe_float(value: Optional[str]) -> Optional[float]:
     if value is None or value == "":
         return None
     try:
@@ -34,7 +32,7 @@ def safe_float(value: str | None) -> float | None:
         return None
 
 
-def format_scientific_id(token: str) -> str | None:
+def format_scientific_id(token: str) -> Optional[str]:
     token = token.strip()
     if not token:
         return None
@@ -44,7 +42,7 @@ def format_scientific_id(token: str) -> str | None:
         return None
 
 
-def extract_ids(text: str | None) -> List[str]:
+def extract_ids(text: Optional[str]) -> List[str]:
     if not text:
         return []
     result: List[str] = []
@@ -75,7 +73,7 @@ def read_sample_rows(sample_dir: Path) -> List[Dict[str, str]]:
     return rows
 
 
-def calc_ei(glu: str | None, gaba: str | None) -> float | None:
+def calc_ei(glu: Optional[str], gaba: Optional[str]) -> Optional[float]:
     g = safe_float(glu)
     b = safe_float(gaba)
     if g is None or b is None or b == 0:
@@ -87,10 +85,10 @@ def class_value(row: Dict[str, str]) -> str:
     return (row.get("class") or row.get("subclass") or "").strip()
 
 
-def process_sample(sample_dir: Path, output_dir: Path) -> tuple[str, int, Path]:
+def process_sample(sample_dir: Path, output_dir: Path) -> Tuple[str, int, Path]:
     rows = read_sample_rows(sample_dir)
 
-    groups: Dict[tuple[str, str], List[Dict[str, str]]] = {}
+    groups: Dict[Tuple[str, str], List[Dict[str, str]]] = {}
     for row in rows:
         key = (row.get("slide", ""), row.get("layer", ""))
         groups.setdefault(key, []).append(row)

@@ -11,8 +11,6 @@
 - sample_vs_true_permutation_pvalues.recomputed.csv（仅当未提供 --pvalue-csv 时）
 """
 
-from __future__ import annotations
-
 import argparse
 import csv
 import math

@@ -10,9 +10,9 @@
    - sample_pair_overlap_percent.csv
    - sample_vs_true_permutation_pvalues.csv
    - sample_vs_true_overlap_plot.svg（柱状图 + sample 点 + 误差线 + 显著性）
+   - sample_only_overlap_summary.csv（仅随机500次：均值/SD）
+   - sample_only_overlap_plot.svg（仅随机500次：均值柱 + SD误差线）
 """
-
-from __future__ import annotations
 
 import argparse
 import csv
@@ -21,7 +21,7 @@ from multiprocessing import Pool
 import random
 from pathlib import Path
 from statistics import mean
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 
 PAIR_ORDER = ["Gaba-Gaba", "Gaba-Glut", "Glut-Gaba", "Glut-Glut"]
@@ -51,7 +51,7 @@ def load_type_mapping(path: Path) -> Dict[str, str]:
     return mapping
 
 
-def normalize_type(value: str | None) -> str:
+def normalize_type(value: Optional[str]) -> str:
     token = (value or "").strip()
     if not token:
         return "Unknown"
@@ -73,7 +73,7 @@ def normalize_type(value: str | None) -> str:
     return token
 
 
-def fill_type(raw_type: str | None, cls: str, mapping: Dict[str, str]) -> str:
+def fill_type(raw_type: Optional[str], cls: str, mapping: Dict[str, str]) -> str:
     ntype = normalize_type(raw_type)
     if ntype != "Unknown":
         return ntype
@@ -297,6 +297,41 @@ def write_pvalue_table(
     return results
 
 
+def write_sample_only_table(
+    sample_dists: Dict[str, Dict[str, Dict[str, float]]],
+    out_csv: Path,
+) -> Dict[Tuple[str, str], Dict[str, float]]:
+    results: Dict[Tuple[str, str], Dict[str, float]] = {}
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
+    with out_csv.open("w", encoding="utf-8", newline="") as fh:
+        fieldnames = [
+            "pair_type",
+            "overlap_bin",
+            "sample_n",
+            "sample_mean",
+            "sample_sd",
+        ]
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+
+        for p in PAIR_ORDER:
+            for b in BINS:
+                vals = [sample_dists[s][p][b] for s in sorted(sample_dists)]
+                m = mean(vals) if vals else 0.0
+                sd = math.sqrt(sum((x - m) ** 2 for x in vals) / (len(vals) - 1)) if len(vals) > 1 else 0.0
+                writer.writerow(
+                    {
+                        "pair_type": p,
+                        "overlap_bin": b,
+                        "sample_n": len(vals),
+                        "sample_mean": f"{m:.6f}",
+                        "sample_sd": f"{sd:.6f}",
+                    }
+                )
+                results[(p, b)] = {"n": len(vals), "mean": m, "sd": sd}
+    return results
+
+
 def draw_plot(
     true_dist: Dict[str, Dict[str, float]],
     sample_dists: Dict[str, Dict[str, Dict[str, float]]],
@@ -409,6 +444,90 @@ def draw_plot(
     out_svg.write_text("\n".join(svg), encoding="utf-8")
 
 
+def draw_sample_only_plot(
+    sample_stats: Dict[Tuple[str, str], Dict[str, float]],
+    out_svg: Path,
+) -> None:
+    width, height = 1360, 680
+    left, right, top, bottom = 90, 40, 120, 110
+    chart_w = width - left - right
+    chart_h = height - top - bottom
+
+    max_mean_sd = max(
+        sample_stats[(p, b)]["mean"] + sample_stats[(p, b)]["sd"]
+        for p in PAIR_ORDER
+        for b in BINS
+    )
+    y_max = max(60.0, max_mean_sd) + 15.0
+
+    def y_to_px(v: float) -> float:
+        return top + chart_h - (v / y_max) * chart_h
+
+    group_w = chart_w / len(PLOT_PAIR_ORDER)
+    bar_w = 24
+    bin_gap = 8
+
+    sample_n = int(sample_stats[(PAIR_ORDER[0], BINS[0])]["n"]) if sample_stats else 0
+
+    svg: List[str] = []
+    svg.append(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">')
+    svg.append('<rect width="100%" height="100%" fill="white"/>')
+    svg.append('<text x="680" y="38" text-anchor="middle" font-size="26" font-weight="700">Permutation-Only Overlap Percent</text>')
+    svg.append(f'<text x="680" y="64" text-anchor="middle" font-size="14">Random samples: n={sample_n} | Bars: mean | Error bars: ±SD</text>')
+
+    svg.append(f'<line x1="{left}" y1="{top}" x2="{left}" y2="{top + chart_h}" stroke="#222" stroke-width="3"/>')
+    svg.append(f'<line x1="{left}" y1="{top + chart_h}" x2="{left + chart_w}" y2="{top + chart_h}" stroke="#222" stroke-width="3"/>')
+
+    for tick in range(0, int(y_max) + 1, 10):
+        y = y_to_px(float(tick))
+        svg.append(f'<line x1="{left - 6}" y1="{y:.2f}" x2="{left}" y2="{y:.2f}" stroke="#222" stroke-width="2"/>')
+        svg.append(f'<text x="{left - 12}" y="{y + 4:.2f}" text-anchor="end" font-size="14">{tick}%</text>')
+
+    lx, ly = 150, 92
+    for i, b in enumerate(BINS):
+        x = lx + i * 145
+        svg.append(f'<rect x="{x}" y="{ly - 12}" width="24" height="14" fill="{COLORS[i]}" stroke="#222" stroke-width="1.6"/>')
+        svg.append(f'<text x="{x + 32}" y="{ly}" font-size="15">{b}</text>')
+    svg.append('<line x1="970" y1="84" x2="998" y2="84" stroke="#111" stroke-width="2.6"/>')
+    svg.append('<line x1="984" y1="76" x2="984" y2="92" stroke="#111" stroke-width="2.6"/>')
+    svg.append('<text x="1006" y="89" font-size="14">mean ± SD</text>')
+
+    for g, pair in enumerate(PLOT_PAIR_ORDER):
+        center = left + group_w * (g + 0.5)
+        cluster_w = len(BINS) * bar_w + (len(BINS) - 1) * bin_gap
+        start_x = center - cluster_w / 2
+
+        for i, b in enumerate(BINS):
+            st = sample_stats[(pair, b)]
+            m = st["mean"]
+            sd = st["sd"]
+            x = start_x + i * (bar_w + bin_gap)
+            y_mean = y_to_px(m)
+            h_mean = top + chart_h - y_mean
+
+            svg.append(
+                f'<rect x="{x:.2f}" y="{y_mean:.2f}" width="{bar_w}" height="{h_mean:.2f}" '
+                f'fill="{COLORS[i]}" fill-opacity="0.90" stroke="#222" stroke-width="1.8"/>'
+            )
+            svg.append(
+                f'<text x="{x + bar_w / 2:.2f}" y="{max(12, y_mean - 4):.2f}" text-anchor="middle" '
+                f'font-size="9" font-weight="600" fill="#1f1f1f">{m:.1f}%</text>'
+            )
+
+            ex = x + bar_w / 2
+            y1 = y_to_px(max(0.0, m - sd))
+            y2 = y_to_px(m + sd)
+            svg.append(f'<line x1="{ex:.2f}" y1="{y1:.2f}" x2="{ex:.2f}" y2="{y2:.2f}" stroke="#111" stroke-width="2.2"/>')
+            svg.append(f'<line x1="{ex - 4:.2f}" y1="{y1:.2f}" x2="{ex + 4:.2f}" y2="{y1:.2f}" stroke="#111" stroke-width="2.2"/>')
+            svg.append(f'<line x1="{ex - 4:.2f}" y1="{y2:.2f}" x2="{ex + 4:.2f}" y2="{y2:.2f}" stroke="#111" stroke-width="2.2"/>')
+
+        svg.append(f'<text x="{center:.2f}" y="{top + chart_h + 45}" text-anchor="middle" font-size="20">{PAIR_LABELS[pair]}</text>')
+
+    svg.append('</svg>')
+    out_svg.parent.mkdir(parents=True, exist_ok=True)
+    out_svg.write_text("\n".join(svg), encoding="utf-8")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compute sample overlap percentages, permutation p-values, and plot.")
     parser.add_argument("--overlap-dir", type=Path, default=Path("overlap_results"))
@@ -445,15 +564,21 @@ def main() -> None:
     sample_table = args.out_dir / "sample_pair_overlap_percent.csv"
     pvalue_table = args.out_dir / "sample_vs_true_permutation_pvalues.csv"
     plot_file = args.out_dir / "sample_vs_true_overlap_plot.svg"
+    sample_only_table = args.out_dir / "sample_only_overlap_summary.csv"
+    sample_only_plot = args.out_dir / "sample_only_overlap_plot.svg"
 
     write_sample_table(sample_dists, sample_table)
     stats = write_pvalue_table(true_dist, sample_dists, pvalue_table)
     draw_plot(true_dist, sample_dists, stats, plot_file)
+    sample_only_stats = write_sample_only_table(sample_dists, sample_only_table)
+    draw_sample_only_plot(sample_only_stats, sample_only_plot)
 
     print(f"Samples: {len(sample_dists)}")
     print(f"Sample percent table -> {sample_table}")
     print(f"Permutation p-value table -> {pvalue_table}")
     print(f"Plot -> {plot_file}")
+    print(f"Sample-only summary -> {sample_only_table}")
+    print(f"Sample-only plot -> {sample_only_plot}")
 
 
 if __name__ == "__main__":
