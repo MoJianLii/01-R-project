@@ -5,7 +5,7 @@
 1) 读取 true_data_overlap_results/true_data_pair_overlap_percent.csv 作为真实值。
 2) 读取 overlap_results/*_cellid_overlap_summary_filtered.csv，按 compute_true_data_overlap_plot.py 的逻辑
    计算每个 sample 在 4 个 pair_type x 5 个 overlap_bin 的百分比。
-3) 对每个 (pair_type, overlap_bin) 做 one-sample sign-flip permutation test，比较 sample 百分比与 true 百分比。
+3) 对每个 (pair_type, overlap_bin) 用 500 次随机结果做双侧经验 p 值，与 true 百分比比较。
 4) 输出：
    - sample_pair_overlap_percent.csv
    - sample_vs_true_permutation_pvalues.csv
@@ -18,14 +18,13 @@ import argparse
 import csv
 import math
 from multiprocessing import Pool
-import random
 from pathlib import Path
 from statistics import mean
 from typing import Dict, Iterable, List, Optional, Tuple
 
 
 PAIR_ORDER = ["Gaba-Gaba", "Gaba-Glut", "Glut-Gaba", "Glut-Glut"]
-PLOT_PAIR_ORDER = ["Gaba-Gaba", "Glut-Gaba", "Gaba-Glut", "Glut-Glut"]
+PLOT_PAIR_ORDER = ["Gaba-Gaba", "Gaba-Glut", "Glut-Gaba", "Glut-Glut"]
 PAIR_LABELS = {
     "Gaba-Gaba": "GABA-GABA",
     "Gaba-Glut": "GABA-Glut",
@@ -34,9 +33,9 @@ PAIR_LABELS = {
 }
 BINS = ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"]
 COLORS = ["#d9d2ad", "#b7d4ca", "#57a9a5", "#3d80ad", "#294f72"]
-SAMPLE_BAR_COLOR = "#7b4ab8"
+TRUE_BAR_COLOR = "#c9c9c9"
 TRUE_LABEL_COLOR = "#1f1f1f"
-SAMPLE_LABEL_COLOR = "#4b237a"
+SAMPLE_LABEL_COLOR = "#1f1f1f"
 
 
 def load_type_mapping(path: Path) -> Dict[str, str]:
@@ -195,34 +194,13 @@ def load_true_distribution(path: Path) -> Dict[str, Dict[str, float]]:
     return out
 
 
-def sign_flip_pvalue(diffs: List[float], n_perm: int = 10000, seed: int = 0) -> float:
-    n = len(diffs)
+def empirical_two_sided_pvalue(values: List[float], true_value: float) -> float:
+    n = len(values)
     if n == 0:
         return float("nan")
-    observed = abs(mean(diffs))
-
-    # 样本数较小时做精确置换（2^n）
-    if n <= 16:
-        total = 1 << n
-        extreme = 0
-        for mask in range(total):
-            s = 0.0
-            for i, d in enumerate(diffs):
-                sign = -1.0 if ((mask >> i) & 1) else 1.0
-                s += sign * d
-            if abs(s / n) >= observed - 1e-12:
-                extreme += 1
-        return (extreme + 1.0) / (total + 1.0)
-
-    rng = random.Random(seed)
-    extreme = 0
-    for _ in range(n_perm):
-        s = 0.0
-        for d in diffs:
-            s += d if rng.random() < 0.5 else -d
-        if abs(s / n) >= observed - 1e-12:
-            extreme += 1
-    return (extreme + 1.0) / (n_perm + 1.0)
+    lo = (sum(v <= true_value for v in values) + 1.0) / (n + 1.0)
+    hi = (sum(v >= true_value for v in values) + 1.0) / (n + 1.0)
+    return min(1.0, 2.0 * min(lo, hi))
 
 
 def stars_for_p(p: float) -> str:
@@ -273,15 +251,16 @@ def write_pvalue_table(
             for b in BINS:
                 vals = [sample_dists[s][p][b] for s in sorted(sample_dists)]
                 tv = true_dist[p][b]
-                sd = math.sqrt(sum((x - mean(vals)) ** 2 for x in vals) / (len(vals) - 1)) if len(vals) > 1 else 0.0
-                pv = sign_flip_pvalue([x - tv for x in vals])
+                m = mean(vals) if vals else 0.0
+                sd = math.sqrt(sum((x - m) ** 2 for x in vals) / (len(vals) - 1)) if len(vals) > 1 else 0.0
+                pv = empirical_two_sided_pvalue(vals, tv)
                 sig = stars_for_p(pv)
                 row = {
                     "pair_type": p,
                     "overlap_bin": b,
                     "true_percent": f"{tv:.6f}",
                     "sample_n": len(vals),
-                    "sample_mean": f"{mean(vals):.6f}",
+                    "sample_mean": f"{m:.6f}",
                     "sample_sd": f"{sd:.6f}",
                     "p_value": "nan" if math.isnan(pv) else f"{pv:.6g}",
                     "significance": sig,
@@ -289,7 +268,7 @@ def write_pvalue_table(
                 writer.writerow(row)
                 results[(p, b)] = {
                     "true": tv,
-                    "mean": mean(vals),
+                    "mean": m,
                     "sd": sd,
                     "p": pv,
                     "sig": sig,
@@ -380,13 +359,11 @@ def draw_plot(
         x = lx + i * 145
         svg.append(f'<rect x="{x}" y="{ly - 12}" width="24" height="14" fill="{COLORS[i]}" stroke="#222" stroke-width="1.6"/>')
         svg.append(f'<text x="{x + 32}" y="{ly}" font-size="15">{b}</text>')
-    svg.append('<rect x="1040" y="54" width="18" height="14" fill="#7f7f7f" fill-opacity="0.35" stroke="#222" stroke-width="1.6"/>')
+    svg.append(f'<rect x="1040" y="54" width="18" height="14" fill="{TRUE_BAR_COLOR}" fill-opacity="0.85" stroke="#222" stroke-width="1.6"/>')
     svg.append('<text x="1066" y="66" font-size="14">true</text>')
-    svg.append(f'<rect x="1120" y="54" width="18" height="14" fill="{SAMPLE_BAR_COLOR}" fill-opacity="0.9" stroke="#222" stroke-width="1.6"/>')
-    svg.append('<text x="1146" y="66" font-size="14">sample mean</text>')
-    svg.append('<line x1="1248" y1="61" x2="1276" y2="61" stroke="#111" stroke-width="2.6"/>')
-    svg.append('<line x1="1262" y1="53" x2="1262" y2="69" stroke="#111" stroke-width="2.6"/>')
-    svg.append('<text x="1284" y="66" font-size="14">sample mean ± SD</text>')
+    svg.append('<line x1="1128" y1="61" x2="1156" y2="61" stroke="#111" stroke-width="2.6"/>')
+    svg.append('<line x1="1142" y1="53" x2="1142" y2="69" stroke="#111" stroke-width="2.6"/>')
+    svg.append('<text x="1164" y="66" font-size="14">sample mean ± SD</text>')
 
     for g, pair in enumerate(PLOT_PAIR_ORDER):
         center = left + group_w * (g + 0.5)
@@ -402,7 +379,7 @@ def draw_plot(
             h_true = top + chart_h - y_true
             svg.append(
                 f'<rect x="{true_x:.2f}" y="{y_true:.2f}" width="{bar_w}" height="{h_true:.2f}" '
-                f'fill="{COLORS[i]}" fill-opacity="0.35" stroke="#222" stroke-width="1.8"/>'
+                f'fill="{TRUE_BAR_COLOR}" fill-opacity="0.85" stroke="#222" stroke-width="1.8"/>'
             )
             true_label_y = max(12, y_true - 4)
             svg.append(
@@ -417,7 +394,7 @@ def draw_plot(
             h_mean = top + chart_h - y_mean
             svg.append(
                 f'<rect x="{mean_x:.2f}" y="{y_mean:.2f}" width="{bar_w}" height="{h_mean:.2f}" '
-                f'fill="{SAMPLE_BAR_COLOR}" fill-opacity="0.9" stroke="#222" stroke-width="1.8"/>'
+                f'fill="{COLORS[i]}" fill-opacity="0.95" stroke="#222" stroke-width="1.8"/>'
             )
             mean_label_y = max(12, y_mean - 4)
             svg.append(
