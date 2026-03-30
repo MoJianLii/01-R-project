@@ -24,11 +24,18 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 
 PAIR_ORDER = ["Gaba-Gaba", "Gaba-Glut", "Glut-Gaba", "Glut-Glut"]
-PLOT_PAIR_ORDER = ["Gaba-Gaba", "Gaba-Glut", "Glut-Gaba", "Glut-Glut"]
+PLOT_PAIR_ORDER = ["Gaba-Gaba", "Glut-Gaba", "Gaba-Glut", "Glut-Glut"]
 PAIR_LABELS = {
     "Gaba-Gaba": "GABA-GABA",
     "Gaba-Glut": "GABA-Glut",
     "Glut-Gaba": "Glut-GABA",
+    "Glut-Glut": "Glut-Glut",
+}
+# 仅用于图上的x轴标签：中间两组标签对调（不改变柱子数据顺序）
+PLOT_PAIR_LABELS = {
+    "Gaba-Gaba": "GABA-GABA",
+    "Glut-Gaba": "GABA-Glut",
+    "Gaba-Glut": "Glut-GABA",
     "Glut-Glut": "Glut-Glut",
 }
 BINS = ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"]
@@ -413,7 +420,7 @@ def draw_plot(
             sig_x = (true_x + mean_x + bar_w) / 2
             svg.append(f'<text x="{sig_x:.2f}" y="{max(16, sig_y):.2f}" text-anchor="middle" font-size="13" font-weight="700">{stat["sig"]}</text>')
 
-        svg.append(f'<text x="{center:.2f}" y="{top + chart_h + 45}" text-anchor="middle" font-size="20">{PAIR_LABELS[pair]}</text>')
+        svg.append(f'<text x="{center:.2f}" y="{top + chart_h + 45}" text-anchor="middle" font-size="20">{PLOT_PAIR_LABELS[pair]}</text>')
 
     svg.append('</svg>')
 
@@ -498,7 +505,7 @@ def draw_sample_only_plot(
             svg.append(f'<line x1="{ex - 4:.2f}" y1="{y1:.2f}" x2="{ex + 4:.2f}" y2="{y1:.2f}" stroke="#111" stroke-width="2.2"/>')
             svg.append(f'<line x1="{ex - 4:.2f}" y1="{y2:.2f}" x2="{ex + 4:.2f}" y2="{y2:.2f}" stroke="#111" stroke-width="2.2"/>')
 
-        svg.append(f'<text x="{center:.2f}" y="{top + chart_h + 45}" text-anchor="middle" font-size="20">{PAIR_LABELS[pair]}</text>')
+        svg.append(f'<text x="{center:.2f}" y="{top + chart_h + 45}" text-anchor="middle" font-size="20">{PLOT_PAIR_LABELS[pair]}</text>')
 
     svg.append('</svg>')
     out_svg.parent.mkdir(parents=True, exist_ok=True)
